@@ -15,6 +15,9 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "${POSTGRES_HOST_PORT:-5433}:5432"
+    networks:
+      internal:
+        aliases: [recruitment-db]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-recruitment}"]
       interval: 5s
@@ -28,7 +31,7 @@ services:
     restart: unless-stopped
     environment:
       - PORT=3001
-      - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@postgres:5432/${POSTGRES_DB:-recruitment}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@recruitment-db:5432/${POSTGRES_DB:-recruitment}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
       - EVOLUTION_WEBHOOK_TOKEN=${EVOLUTION_WEBHOOK_TOKEN}
@@ -41,6 +44,11 @@ services:
       - ${SERVICE_ACCOUNT_KEY_FILE:-/dev/null}:/app/service-account.json:ro
     ports:
       - "${BACKEND_HOST_PORT:-3012}:3001"
+    networks:
+      internal:
+        aliases: [recruitment-api]
+      shared:
+        aliases: [recruitment-api]
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +62,7 @@ services:
     restart: unless-stopped
     command: ["node", "src/worker.js"]
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@postgres:5432/${POSTGRES_DB:-recruitment}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@recruitment-db:5432/${POSTGRES_DB:-recruitment}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
       - BATCH_QUIET_SECONDS=${BATCH_QUIET_SECONDS:-60}
@@ -69,6 +77,7 @@ services:
       - GOOGLE_SERVICE_ACCOUNT_KEY=${GOOGLE_SERVICE_ACCOUNT_KEY}
     volumes:
       - ${SERVICE_ACCOUNT_KEY_FILE:-/dev/null}:/app/service-account.json:ro
+    networks: [internal, shared]
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,17 +89,30 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_HOST_PORT:-3013}:80"
+    networks: [internal]
     depends_on:
       - backend
 
 volumes:
   pgdata:
 
-# Evolution reaches n8n as http://n8n:5678, so both already share a Docker
-# network. Joining it lets Evolution resolve this stack by container name and
-# lets the worker call Evolution back to fetch resume attachments.
-# Set EVOLUTION_NETWORK to that network's name and EVOLUTION_NETWORK_EXTERNAL=true.
+# Two networks, deliberately.
+#
+# `internal` is private to this stack and is the ONLY place the database is
+# reachable. A shared network like Evolution's carries many compose projects,
+# several of which publish a service named `postgres`; Docker DNS round-robins
+# between same-named aliases, so a database on the shared network resolves to a
+# different project's server at random and fails authentication intermittently.
+#
+# `shared` is Evolution's network, joined only by the services that genuinely
+# need it: the backend (so Evolution can POST webhooks to it) and the worker
+# (so it can fetch resume attachments back from Evolution).
+#
+# Service aliases are prefixed for the same reason — `backend` and `postgres`
+# are far too generic to be unique on a shared network.
 networks:
-  default:
+  internal:
+    name: ${STACK_PREFIX:-recruitment-v2}-internal
+  shared:
     name: ${EVOLUTION_NETWORK:-recruitment-v2-net}
     external: ${EVOLUTION_NETWORK_EXTERNAL:-false}

@@ -2,14 +2,149 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Monochrome token set.
+
+   Light mode is ink on paper; dark mode inverts the same ladder. Because every
+   component references tokens rather than literal greys, the two themes stay in
+   step automatically — and there is no hue anywhere to drift.
+--------------------------------------------------------------------------- */
 @layer base {
+  :root {
+    --paper:   #ffffff;
+    --surface: #f6f6f6;
+    --ink:     #0a0a0a;
+    --ink-2:   #545454;
+    --ink-3:   #9b9b9b;
+    --rule:    #e2e2e2;
+  }
+
+  .dark {
+    --paper:   #0a0a0a;
+    --surface: #151515;
+    --ink:     #fafafa;
+    --ink-2:   #a8a8a8;
+    --ink-3:   #6a6a6a;
+    --rule:    #282828;
+  }
+
+  /* Preflight defaults every border to a blue-tinted gray-200. Any element
+     given a bare `border` would inherit that tint, so retarget it at the token. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--rule);
+  }
+
   body {
-    @apply bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100;
+    @apply bg-paper text-ink antialiased;
+    font-feature-settings: 'kern' 1, 'liga' 1, 'cv11' 1;
+  }
+
+  /* Numbers should align in columns and never jitter as they update. */
+  .tnum, table, input[type='date'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  /* One focus treatment everywhere: a hard ink ring, no colour. */
+  *:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  input[type='date']::-webkit-calendar-picker-indicator {
+    filter: grayscale(1);
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  .dark input[type='date']::-webkit-calendar-picker-indicator {
+    filter: grayscale(1) invert(1);
   }
 }
 
-@layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
+@layer components {
+  /* Structure ------------------------------------------------------------- */
+  .card {
+    @apply border border-rule bg-paper;
+  }
+
+  .card-pad {
+    @apply border border-rule bg-paper p-5;
+  }
+
+  /* Micro label: uppercase, tracked out. Carries the hierarchy that colour
+     would normally carry. */
+  .micro {
+    @apply text-[11px] font-semibold uppercase tracking-micro text-ink-2;
+  }
+
+  .page-title {
+    @apply text-3xl font-bold tracking-tight text-ink;
+  }
+
+  .page-sub {
+    @apply mt-1 text-sm text-ink-2;
+  }
+
+  .stat {
+    @apply tnum text-4xl font-bold leading-none tracking-tight text-ink;
+  }
+
+  .mono-id {
+    @apply font-mono text-xs tracking-tight text-ink-2;
+  }
+
+  /* Controls -------------------------------------------------------------- */
+  .input {
+    @apply border border-rule bg-paper px-3 py-1.5 text-sm text-ink
+           transition-colors placeholder:text-ink-3 hover:border-ink-3
+           focus:border-ink focus:outline-none;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 border border-rule bg-paper px-3.5 py-2
+           text-xs font-semibold uppercase tracking-micro text-ink
+           transition-colors hover:border-ink hover:bg-surface
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-solid {
+    @apply inline-flex items-center gap-2 border border-ink bg-ink px-3.5 py-2
+           text-xs font-semibold uppercase tracking-micro text-paper
+           transition-opacity hover:opacity-80
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-quiet {
+    @apply inline-flex items-center gap-1.5 text-sm text-ink-2
+           underline underline-offset-4 transition-colors hover:text-ink;
+  }
+
+  /* Tables ---------------------------------------------------------------- */
+  .th {
+    @apply border-b border-ink px-4 py-2.5 text-left text-[11px] font-semibold
+           uppercase tracking-micro text-ink;
+  }
+
+  .td {
+    @apply px-4 py-3.5 text-sm text-ink align-top;
+  }
+
+  .row-link {
+    @apply cursor-pointer border-b border-rule transition-colors hover:bg-surface;
+  }
+
+  .skeleton {
+    @apply animate-pulse bg-rule;
+  }
+
+  /* Notices --------------------------------------------------------------- */
+  .notice-error {
+    @apply border border-ink bg-surface px-4 py-3 text-sm text-ink;
   }
 }

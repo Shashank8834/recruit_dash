@@ -5,6 +5,7 @@ import JDList from './pages/JDList';
 import JDDetail from './pages/JDDetail';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import Review from './pages/Review';
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/jds/:id" element={<JDDetail />} />
         <Route path="/candidates" element={<CandidateList />} />
         <Route path="/candidates/:id" element={<CandidateDetail />} />
+        <Route path="/review" element={<Review />} />
       </Routes>
     </Layout>
   );

@@ -2,32 +2,67 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
+const { pool, query } = require('./db');
+const { migrate } = require('./db/migrate');
+
 const dashboardRoutes = require('./routes/dashboard');
 const jdsRoutes = require('./routes/jds');
 const applicantsRoutes = require('./routes/applicants');
-const { fetchAllData } = require('./services/sheets');
+const webhookRoutes = require('./routes/webhook');
+const reviewRoutes = require('./routes/review');
+const sheetMirror = require('./services/sheetMirror');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+// WhatsApp messages can carry long forwarded text and base64 media metadata.
+app.use(express.json({ limit: '5mb' }));
 
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/jds', jdsRoutes);
 app.use('/api/applicants', applicantsRoutes);
+app.use('/api/review', reviewRoutes);
+app.use('/webhook', webhookRoutes);
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
-
-app.post('/api/refresh', async (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   try {
-    await fetchAllData(true);
-    res.json({ message: 'Cache refreshed' });
+    await query('SELECT 1');
+    res.json({ status: 'ok', db: 'up', sheetMirror: sheetMirror.isEnabled() });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', db: 'down', error: err.message });
+  }
+});
+
+/** Force a sheet mirror rewrite now instead of waiting for the worker. */
+app.post('/api/sheets/sync', async (_req, res) => {
+  try {
+    res.json(await sheetMirror.sync());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Recruitment dashboard backend running on port ${PORT}`);
+app.use((err, _req, res, _next) => {
+  console.error('[api] unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+async function shutdown(signal) {
+  console.log(`[api] ${signal} received, closing`);
+  await pool.end();
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+(async () => {
+  await migrate();
+  app.listen(PORT, () => {
+    console.log(`Recruitment dashboard API on :${PORT}`);
+    console.log(`WhatsApp webhook: POST http://localhost:${PORT}/webhook/whatsapp`);
+  });
+})().catch((err) => {
+  console.error('[api] failed to start:', err);
+  process.exit(1);
 });

@@ -9,6 +9,11 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      // So you can point a local Evolution instance at the dev server.
+      '/webhook': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
 });

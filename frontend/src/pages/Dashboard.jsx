@@ -1,9 +1,59 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import SummaryCard from '../components/SummaryCard';
 import DateRangeFilter from '../components/DateRangeFilter';
 import { toDateInput, toUnix, nowMinus } from '../lib/utils';
 
-const RESULT_OPTIONS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'UNKNOWN'];
+const RESULT_OPTIONS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'NEEDS_REVIEW', 'UNKNOWN'];
+
+/**
+ * Distribution as a stacked ink bar. Density does the ranking that colour
+ * normally would: solid ink for STRONG down to a hairline outline for UNKNOWN.
+ */
+const BAND_FILL = {
+  STRONG:       'bg-ink',
+  PARTIAL:      'bg-ink/65',
+  WEAK:         'bg-ink/40',
+  NEEDS_REVIEW: 'bg-ink/25',
+  NONE:         'bg-ink/12',
+  UNKNOWN:      'bg-ink/5',
+};
+
+function Distribution({ rows, total }) {
+  if (!total) {
+    return <p className="text-sm text-ink-3">No classifications in this range.</p>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex h-3 w-full overflow-hidden border border-ink">
+        {rows.map(([key, value]) =>
+          value > 0 ? (
+            <span
+              key={key}
+              className={BAND_FILL[key]}
+              style={{ width: `${(value / total) * 100}%` }}
+              title={`${key}: ${value}`}
+            />
+          ) : null
+        )}
+      </div>
+
+      <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3">
+        {rows.map(([key, value]) => (
+          <div key={key} className="flex items-center gap-2.5 border-b border-rule pb-2">
+            <span className={`h-2.5 w-2.5 flex-shrink-0 border border-ink ${BAND_FILL[key]}`} />
+            <dt className="micro flex-1 truncate">{key.replace('_', ' ')}</dt>
+            <dd className="tnum text-sm font-bold text-ink">{value}</dd>
+            <dd className="tnum w-10 text-right text-xs text-ink-3">
+              {total ? Math.round((value / total) * 100) : 0}%
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -28,114 +78,158 @@ export default function Dashboard() {
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [startDate, endDate, resultFilter]);
 
+  // Postgres is read live, so this is a re-fetch plus a nudge to push the
+  // latest state out to the Google Sheet mirror.
   async function handleRefresh() {
     setRefreshing(true);
     const today = toDateInput(Math.floor(Date.now() / 1000));
     if (endDate < today) setEndDate(today);
-    await fetch('/api/refresh', { method: 'POST' });
-    const params = new URLSearchParams({ startDate: toUnix(startDate), endDate: toUnix(today, true) });
-    if (resultFilter) params.set('result', resultFilter);
-    const data = await fetch(`/api/dashboard?${params}`).then((r) => r.json());
-    setStats(data);
+    try {
+      await fetch('/api/sheets/sync', { method: 'POST' });
+      const params = new URLSearchParams({ startDate: toUnix(startDate), endDate: toUnix(today, true) });
+      if (resultFilter) params.set('result', resultFilter);
+      const data = await fetch(`/api/dashboard?${params}`).then((r) => r.json());
+      setStats(data);
+    } catch (e) {
+      setError(e.message);
+    }
     setRefreshing(false);
   }
 
+  const rows = stats
+    ? [
+        ['STRONG', stats.strongMatches],
+        ['PARTIAL', stats.partialMatches],
+        ['WEAK', stats.weakMatches],
+        ['NEEDS_REVIEW', stats.needsReview || 0],
+        ['NONE', stats.noneMatches],
+        ['UNKNOWN', stats.unknownMatches],
+      ]
+    : [];
+  const total = rows.reduce((a, [, v]) => a + v, 0);
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-10">
+      {/* Masthead */}
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Recruitment overview</p>
+          <p className="micro">Recruitment</p>
+          <h1 className="page-title mt-1">Overview</h1>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-        >
-          <svg className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        <button onClick={handleRefresh} disabled={refreshing} className="btn">
+          <svg
+            className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`}
+            fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="square" d="M20 12a8 8 0 10-2.3 5.7M20 5v5h-5" />
           </svg>
-          Refresh data
+          {refreshing ? 'Syncing' : 'Sync sheet'}
         </button>
-      </div>
+      </header>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+      <div className="flex flex-wrap items-center gap-6 border border-rule bg-surface px-5 py-4">
         <DateRangeFilter
           startDate={startDate}
           endDate={endDate}
           onStartChange={setStartDate}
           onEndChange={setEndDate}
         />
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Match</label>
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Match</span>
           <select
             value={resultFilter}
             onChange={(e) => setResultFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+            className="input"
           >
             <option value="">All</option>
-            {RESULT_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+            {RESULT_OPTIONS.map((r) => <option key={r} value={r}>{r.replace('_', ' ')}</option>)}
           </select>
-        </div>
+        </label>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-          Error: {error}
-        </div>
-      )}
+      {error && <div className="notice-error">Error: {error}</div>}
 
-      {/* Summary cards */}
       {loading ? (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-32 animate-pulse rounded-xl bg-gray-200 dark:bg-gray-800" />
-          ))}
+        <div className="grid grid-cols-1 gap-px bg-rule sm:grid-cols-3">
+          {[...Array(3)].map((_, i) => <div key={i} className="skeleton h-36" />)}
         </div>
       ) : stats ? (
         <>
-          {/* Top 3 KPI cards */}
+          {/* Headline figures */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <SummaryCard label="Open roles" value={stats.totalJDs} />
+            <SummaryCard label="Candidates" value={stats.totalApplicants} />
             <SummaryCard
-              label="Total Job Descriptions"
-              value={stats.totalJDs}
-              color="indigo"
-              icon={<svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>}
-            />
-            <SummaryCard
-              label="Total Applicants"
-              value={stats.totalApplicants}
-              color="indigo"
-              icon={<svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
-            />
-            <SummaryCard
-              label="Strong Matches"
+              label="Strong matches"
               value={stats.strongMatches}
-              color="green"
-              icon={<svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+              emphasis
+              hint="Meets essentially all stated requirements"
             />
           </div>
 
-          {/* Match breakdown row */}
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-              <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Partial</p>
-              <p className="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400">{stats.partialMatches}</p>
+          {/* Review queue call-out */}
+          {stats.needsReview > 0 && (
+            <Link
+              to="/review"
+              className="group flex items-center justify-between gap-6 border-2 border-dashed border-ink px-6 py-5 transition-colors hover:bg-surface"
+            >
+              <div className="flex items-baseline gap-5">
+                <span className="tnum text-4xl font-bold leading-none text-ink">
+                  {stats.needsReview}
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-ink">Awaiting human review</p>
+                  <p className="mt-0.5 text-xs text-ink-2">
+                    Classified below the confidence threshold
+                  </p>
+                </div>
+              </div>
+              <span className="micro flex items-center gap-2 text-ink">
+                Open queue
+                <svg className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="square" d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+              </span>
+            </Link>
+          )}
+
+          {/* Distribution */}
+          <section className="space-y-5">
+            <div className="flex items-baseline justify-between border-b border-rule pb-2">
+              <h2 className="micro">Match distribution</h2>
+              <span className="tnum text-xs text-ink-3">{total} classified</span>
             </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-              <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Weak</p>
-              <p className="mt-1 text-xl font-bold text-orange-600 dark:text-orange-400">{stats.weakMatches}</p>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-              <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">No Match</p>
-              <p className="mt-1 text-xl font-bold text-red-600 dark:text-red-400">{stats.noneMatches}</p>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-              <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Unknown</p>
-              <p className="mt-1 text-xl font-bold text-gray-500 dark:text-gray-400">{stats.unknownMatches}</p>
-            </div>
-          </div>
+            <Distribution rows={rows} total={total} />
+          </section>
+
+          {/* Pipeline health */}
+          {stats.pipeline && (
+            <section className="space-y-4">
+              <h2 className="micro border-b border-rule pb-2">Pipeline</h2>
+              <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
+                {[
+                  ['Chats mid-batch', stats.pipeline.pending_batches],
+                  ['Unclassified', stats.pipeline.pending_submissions],
+                  ['Failed', stats.pipeline.failed_submissions],
+                  ['Sheet backlog', stats.pipeline.sheet_backlog],
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-paper px-4 py-4">
+                    <p className="micro">{label}</p>
+                    <p
+                      className={`tnum mt-2 text-2xl font-bold leading-none ${
+                        label === 'Failed' && value > 0
+                          ? 'text-ink underline decoration-2 underline-offset-4'
+                          : 'text-ink'
+                      }`}
+                    >
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </>
       ) : null}
     </div>

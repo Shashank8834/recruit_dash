@@ -1,38 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { fetchAllData, deleteJD } = require('../services/sheets');
+const jdsRepo = require('../repo/jds');
+const applicantsRepo = require('../repo/applicants');
+const sheetMirror = require('../services/sheetMirror');
+const serialize = require('../serializers');
+
+function dateRange(req) {
+  const now = Math.floor(Date.now() / 1000);
+  const start = req.query.startDate
+    ? parseInt(req.query.startDate, 10)
+    : now - 30 * 24 * 60 * 60;
+  const end = req.query.endDate ? parseInt(req.query.endDate, 10) : now;
+  return { start, end };
+}
 
 router.get('/', async (req, res) => {
   try {
-    const { startDate, endDate, status } = req.query;
-    const { jds, applicants } = await fetchAllData();
-
-    const now = Math.floor(Date.now() / 1000);
-    const defaultStart = now - 30 * 24 * 60 * 60;
-    const start = startDate ? parseInt(startDate) : defaultStart;
-    const end = endDate ? parseInt(endDate) : now;
-
-    let filtered = jds.filter((jd) => {
-      const ts = parseInt(jd.Date);
-      return ts >= start && ts <= end;
-    });
-
-    if (status) {
-      filtered = filtered.filter((jd) => jd.Status === status);
-    }
-
-    const result = filtered
-      .map((jd) => {
-        const matched = applicants.filter((a) => a.JD_ID === jd.JD_ID);
-        return {
-          ...jd,
-          Date: parseInt(jd.Date),
-          candidateCount: matched.length,
-        };
-      })
-      .sort((a, b) => b.Date - a.Date);
-
-    res.json(result);
+    const { start, end } = dateRange(req);
+    const rows = await jdsRepo.listBetween({ start, end, status: req.query.status });
+    res.json(rows.map(serialize.jd));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -41,20 +27,27 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const { applicants, jds } = await fetchAllData();
-    const jd = jds.find((j) => j.JD_ID === req.params.id);
+    const jd = await jdsRepo.findByExternalId(req.params.id);
     if (!jd) return res.status(404).json({ error: 'JD not found' });
 
-    const ORDER = { STRONG: 0, PARTIAL: 1, WEAK: 2, NONE: 3, UNKNOWN: 4 };
-    const matched = applicants
-      .filter((a) => a.JD_ID === jd.JD_ID)
-      .map((a) => ({ ...a, Date: parseInt(a.Date) }))
-      .sort((a, b) => {
-        const orderDiff = (ORDER[a.Result] ?? 4) - (ORDER[b.Result] ?? 4);
-        return orderDiff !== 0 ? orderDiff : b.Date - a.Date;
-      });
+    const matched = await applicantsRepo.listForJd(jd.id);
+    res.json({ ...serialize.jd(jd), applicants: matched.map(serialize.applicant) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    res.json({ ...jd, Date: parseInt(jd.Date), applicants: matched });
+router.patch('/:id', async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!['open', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'status must be "open" or "closed"' });
+    }
+    const updated = await jdsRepo.setStatus(req.params.id, status);
+    if (!updated) return res.status(404).json({ error: 'JD not found' });
+    await sheetMirror.enqueue('jd', updated.id, 'upsert');
+    res.json(serialize.jd(updated));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -63,8 +56,9 @@ router.get('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const deleted = await deleteJD(req.params.id);
+    const deleted = await jdsRepo.remove(req.params.id);
     if (!deleted) return res.status(404).json({ error: 'JD not found' });
+    await sheetMirror.enqueue('jd', deleted.id, 'delete');
     res.json({ success: true });
   } catch (err) {
     console.error(err);

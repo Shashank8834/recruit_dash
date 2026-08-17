@@ -5,3 +5,11 @@ service-account.json
 dist/
 .DS_Store
 .claude/settings.local.json
+
+# Credentials and exports pulled off the server during migration.
+# These contain plaintext secrets — they must never be committed.
+n8n-creds.json
+n8n-workflows.json
+*.pem
+*.key
+!package-lock.json

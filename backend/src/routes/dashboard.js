@@ -1,51 +1,44 @@
 const express = require('express');
 const router = express.Router();
-const { fetchAllData } = require('../services/sheets');
+const { query } = require('../db');
+const applicantsRepo = require('../repo/applicants');
 
 router.get('/', async (req, res) => {
   try {
-    const { startDate, endDate, result } = req.query;
-    const { jds, applicants } = await fetchAllData();
-
     const now = Math.floor(Date.now() / 1000);
-    const defaultStart = now - 30 * 24 * 60 * 60;
+    const start = req.query.startDate
+      ? parseInt(req.query.startDate, 10)
+      : now - 30 * 24 * 60 * 60;
+    const end = req.query.endDate ? parseInt(req.query.endDate, 10) : now;
 
-    const start = startDate ? parseInt(startDate) : defaultStart;
-    const end = endDate ? parseInt(endDate) : now;
+    const [counts, jdCount, pipeline] = await Promise.all([
+      applicantsRepo.counts({ start, end }),
+      query(
+        `SELECT COUNT(*)::int AS count FROM jds
+          WHERE posted_at >= to_timestamp($1) AND posted_at <= to_timestamp($2)`,
+        [start, end]
+      ),
+      query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM pending_batches)                        AS pending_batches,
+           (SELECT COUNT(*)::int FROM submissions WHERE status = 'pending')   AS pending_submissions,
+           (SELECT COUNT(*)::int FROM submissions WHERE status = 'failed')    AS failed_submissions,
+           (SELECT COUNT(*)::int FROM sheet_sync_queue WHERE synced_at IS NULL) AS sheet_backlog`
+      ),
+    ]);
 
-    const filteredJDs = jds.filter((jd) => {
-      const ts = parseInt(jd.Date);
-      return ts >= start && ts <= end;
-    });
-
-    let filteredApplicants = applicants.filter((app) => {
-      const ts = parseInt(app.Date);
-      return ts >= start && ts <= end;
-    });
-
-    if (result) {
-      filteredApplicants = filteredApplicants.filter(
-        (app) => app.Result === result.toUpperCase()
-      );
-    }
-
-    const counts = filteredApplicants.reduce(
-      (acc, app) => {
-        const r = app.Result || 'UNKNOWN';
-        acc[r] = (acc[r] || 0) + 1;
-        return acc;
-      },
-      {}
-    );
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
     res.json({
-      totalJDs: filteredJDs.length,
-      totalApplicants: filteredApplicants.length,
-      strongMatches: counts['STRONG'] || 0,
-      partialMatches: counts['PARTIAL'] || 0,
-      weakMatches: counts['WEAK'] || 0,
-      noneMatches: counts['NONE'] || 0,
-      unknownMatches: counts['UNKNOWN'] || 0,
+      totalJDs: jdCount.rows[0].count,
+      totalApplicants: total,
+      strongMatches: counts.STRONG || 0,
+      partialMatches: counts.PARTIAL || 0,
+      weakMatches: counts.WEAK || 0,
+      noneMatches: counts.NONE || 0,
+      unknownMatches: counts.UNKNOWN || 0,
+      needsReview: counts.NEEDS_REVIEW || 0,
+      pipeline: pipeline.rows[0],
     });
   } catch (err) {
     console.error(err);

@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
+import EvidenceList from '../components/EvidenceList';
+import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
+
+const VERDICTS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'UNKNOWN'];
+const RESULT_ORDER = { STRONG: 0, PARTIAL: 1, WEAK: 2, NEEDS_REVIEW: 3, NONE: 4, UNKNOWN: 5 };
 
 export default function CandidateDetail() {
   const { id } = useParams();
@@ -11,6 +16,45 @@ export default function CandidateDetail() {
   const [error, setError] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [savingVerdict, setSavingVerdict] = useState(null);
+
+  function reload() {
+    return fetch(`/api/applicants/${id}`)
+      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(setApplicant);
+  }
+
+  // A human decision is recorded next to the model's, not on top of it — the
+  // model verdict stays visible so you can see what was corrected.
+  async function setVerdict(verdict) {
+    setSavingVerdict(verdict);
+    try {
+      const r = await fetch(`/api/review/classifications/${applicant.classificationId}/override`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verdict, reviewer: 'dashboard' }),
+      });
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      await reload();
+    } catch (e) {
+      setError(e.message);
+    }
+    setSavingVerdict(null);
+  }
+
+  async function clearVerdict() {
+    setSavingVerdict('clear');
+    try {
+      const r = await fetch(`/api/review/classifications/${applicant.classificationId}/override`, {
+        method: 'DELETE',
+      });
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      await reload();
+    } catch (e) {
+      setError(e.message);
+    }
+    setSavingVerdict(null);
+  }
 
   async function handleDelete() {
     setDeleting(true);
@@ -32,213 +76,213 @@ export default function CandidateDetail() {
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [id]);
 
-  if (loading) return (
-    <div className="space-y-4">
-      <div className="h-8 w-48 animate-pulse rounded bg-gray-200 dark:bg-gray-800" />
-      <div className="h-64 animate-pulse rounded-xl bg-gray-200 dark:bg-gray-800" />
-    </div>
-  );
-
-  if (error) return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
-      Error: {error}
-    </div>
-  );
-
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <div className="skeleton h-9 w-56" />
+        <div className="skeleton h-64" />
+      </div>
+    );
+  }
+  if (error && !applicant) return <div className="notice-error">Error: {error}</div>;
   if (!applicant) return null;
 
-  const RESULT_ORDER = { STRONG: 0, PARTIAL: 1, WEAK: 2, NONE: 3, UNKNOWN: 4 };
   const sortedMatches = [...(applicant.matches || [])].sort(
-    (a, b) => (RESULT_ORDER[a.Result] ?? 5) - (RESULT_ORDER[b.Result] ?? 5)
+    (a, b) => (RESULT_ORDER[a.Result] ?? 6) - (RESULT_ORDER[b.Result] ?? 6)
   );
 
   return (
-    <div className="space-y-6">
-      {/* Back */}
-      <button
-        onClick={() => navigate(-1)}
-        className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-      >
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    <div className="space-y-10">
+      <button onClick={() => navigate(-1)} className="btn-quiet">
+        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="square" d="M19 12H5M11 6l-6 6 6 6" />
         </svg>
-        Back to Candidates
+        All candidates
       </button>
 
-      {/* Contact card */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+      {/* Identity */}
+      <header className="border-b-2 border-ink pb-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-4">
-            {/* Avatar initial */}
-            <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xl font-bold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+            <span className="flex h-12 w-12 flex-shrink-0 items-center justify-center border border-ink bg-ink text-lg font-bold text-paper">
               {(applicant.Name || applicant.Sender || '?')[0].toUpperCase()}
-            </div>
-            <div>
-              {applicant.Name && (
-                <h1 className="text-xl font-bold text-gray-900 dark:text-white">{applicant.Name}</h1>
-              )}
-              <p className={`font-medium ${applicant.Name ? 'text-sm text-gray-500 dark:text-gray-400' : 'text-xl text-gray-900 dark:text-white'}`}>
-                @{applicant.Sender}
-              </p>
-              <p className="mt-0.5 font-mono text-xs text-gray-400 dark:text-gray-500">{applicant.Applicant_ID}</p>
-              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">{formatDateTime(applicant.Date)}</p>
+            </span>
+            <div className="min-w-0">
+              <p className="micro">{applicant.Applicant_ID} · {formatDateTime(applicant.Date)}</p>
+              <h1 className="page-title mt-1.5">{applicant.Name || applicant.Sender}</h1>
+              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-ink-2">
+                {applicant.Phone && (
+                  <a href={`tel:${applicant.Phone}`} className="font-mono hover:text-ink hover:underline hover:underline-offset-4">
+                    {applicant.Phone}
+                  </a>
+                )}
+                {applicant.Email && (
+                  <a href={`mailto:${applicant.Email}`} className="hover:text-ink hover:underline hover:underline-offset-4">
+                    {applicant.Email}
+                  </a>
+                )}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <MatchBadge result={applicant.Result} />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <MatchBadge result={applicant.Result} overridden={!!applicant.overrideVerdict} />
             {!confirmDelete ? (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40"
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Delete
-              </button>
+              <button onClick={() => setConfirmDelete(true)} className="btn">Delete</button>
             ) : (
-              <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 dark:border-red-700 dark:bg-red-900/20">
-                <span className="text-sm text-red-700 dark:text-red-300">Delete applicant?</span>
-                <button
-                  onClick={handleDelete}
-                  disabled={deleting}
-                  className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-                >
-                  {deleting ? 'Deleting…' : 'Confirm'}
+              <span className="flex items-center gap-2 border border-ink px-3 py-1.5">
+                <span className="text-xs text-ink">Delete candidate?</span>
+                <button onClick={handleDelete} disabled={deleting} className="btn-solid !px-2 !py-1">
+                  {deleting ? '…' : 'Confirm'}
                 </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  disabled={deleting}
-                  className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
-                >
+                <button onClick={() => setConfirmDelete(false)} disabled={deleting} className="btn !px-2 !py-1">
                   Cancel
                 </button>
-              </div>
+              </span>
             )}
           </div>
         </div>
+      </header>
 
-        {/* Contact details row */}
-        {(applicant.Phone || applicant.Email) && (
-          <div className="mt-4 flex flex-wrap gap-4 border-t border-gray-100 pt-4 dark:border-gray-800">
-            {applicant.Phone && (
-              <a
-                href={`tel:${applicant.Phone}`}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                <svg className="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
-                {applicant.Phone}
-              </a>
-            )}
-            {applicant.Email && (
-              <a
-                href={`mailto:${applicant.Email}`}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                <svg className="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                {applicant.Email}
-              </a>
-            )}
-          </div>
-        )}
-      </div>
+      {error && <div className="notice-error">{error}</div>}
 
-      {/* Message / Resume */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-          Message / Resume
-        </h2>
-        <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-800 dark:text-gray-200 font-sans">
-          {applicant.Message || 'No message content available.'}
-        </pre>
-      </div>
-
-      {/* AI Match result for primary JD */}
-      {applicant.JD_ID && applicant.JD_ID !== 'NONE' && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-            Primary Match
-          </h2>
-          <p className="font-mono text-sm text-indigo-600 dark:text-indigo-400">{applicant.JD_ID}</p>
-          {applicant.Reason && (
-            <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
-              <span className="font-medium">AI Reason: </span>{applicant.Reason}
-            </p>
+      {/* Message */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-rule pb-2">
+          <h2 className="micro">Message</h2>
+          {applicant.thread?.length > 1 && (
+            <span className="micro border border-ink px-1.5 py-0.5 text-ink">
+              chained from {applicant.thread.length}
+            </span>
           )}
         </div>
-      )}
+        <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">
+          {applicant.Message || 'No message content available.'}
+        </pre>
 
-      {/* All JD matches */}
-      <div>
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-          All JD Matches{' '}
-          <span className="ml-1 text-sm font-normal text-gray-500 dark:text-gray-400">
-            ({applicant.matches?.length ?? 0})
-          </span>
-        </h2>
+        {applicant.thread?.length > 0 && (
+          <details className="pt-2">
+            <summary className="micro cursor-pointer select-none text-ink hover:text-ink-2">
+              Original WhatsApp messages
+            </summary>
+            <div className="mt-4 border-l border-dashed border-rule pl-4">
+              <MessageThread messages={applicant.thread} />
+            </div>
+          </details>
+        )}
+      </section>
 
-        {!applicant.matches?.length ? (
-          <p className="rounded-xl border border-gray-200 bg-white p-5 text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
-            No JD matches recorded for this candidate.
+      {/* Assessment */}
+      <section className="space-y-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule pb-2">
+          <h2 className="micro">Assessment</h2>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-ink-3">
+            {applicant.confidence !== null && (
+              <span className="tnum">confidence {Number(applicant.confidence).toFixed(2)}</span>
+            )}
+            {applicant.model && <span className="font-mono">{applicant.model}</span>}
+            {applicant.promptVersion && <span className="font-mono">{applicant.promptVersion}</span>}
+          </div>
+        </div>
+
+        {applicant.JD_ID && applicant.JD_ID !== 'NONE' && (
+          <button
+            onClick={() => navigate(`/jds/${applicant.JD_ID}`)}
+            className="font-mono text-sm text-ink underline underline-offset-4 hover:text-ink-2"
+          >
+            {applicant.JD_ID}
+          </button>
+        )}
+
+        {applicant.Reason && (
+          <p className="max-w-2xl text-sm leading-relaxed text-ink-2">{applicant.Reason}</p>
+        )}
+
+        <div className="space-y-2">
+          <p className="micro">Evidence</p>
+          <EvidenceList evidence={applicant.evidence} />
+        </div>
+
+        {/* Human override */}
+        <div className="border border-rule bg-surface px-5 py-4">
+          {applicant.overrideVerdict ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="flex-1 text-sm text-ink">
+                Overridden to <strong>{applicant.overrideVerdict}</strong>
+                {applicant.overrideReviewer && ` by ${applicant.overrideReviewer}`}. The model
+                said <strong>{applicant.modelVerdict}</strong>.
+              </p>
+              <button onClick={clearVerdict} disabled={savingVerdict !== null} className="btn">
+                {savingVerdict === 'clear' ? '…' : 'Revert to model'}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="micro mr-1">Correct this verdict</span>
+              {VERDICTS.map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setVerdict(v)}
+                  disabled={savingVerdict !== null || !applicant.classificationId}
+                  className="btn !px-3 !py-1.5"
+                >
+                  {savingVerdict === v ? '…' : v}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Other roles */}
+      <section className="space-y-4">
+        <div className="flex items-baseline justify-between border-b border-rule pb-2">
+          <h2 className="micro">All role matches</h2>
+          <span className="tnum text-xs text-ink-3">{sortedMatches.length}</span>
+        </div>
+
+        {!sortedMatches.length ? (
+          <p className="border border-dashed border-rule px-4 py-8 text-center text-sm text-ink-3">
+            No role matches recorded for this candidate.
           </p>
         ) : (
-          <div className="space-y-3">
+          <ul className="divide-y divide-rule border-b border-rule">
             {sortedMatches.map((match) => (
-              <div
-                key={match.applicant_id}
-                className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
+              <li key={match.applicant_id} className="py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <button
                       onClick={() => navigate(`/jds/${match.JD_ID}`)}
-                      className="font-mono text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                      className="font-mono text-sm text-ink underline underline-offset-4 hover:text-ink-2"
                     >
                       {match.JD_ID}
                     </button>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{formatDate(match.Date)}</p>
-                    {match.jdPostedBy && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Posted by {match.jdPostedBy}</p>
-                    )}
+                    <p className="mono-id mt-1">
+                      {formatDate(match.Date)}
+                      {match.jdPostedBy && ` · ${match.jdPostedBy}`}
+                      {match.jdStatus && ` · ${match.jdStatus}`}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <MatchBadge result={match.Result} />
-                    {match.jdStatus && (
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                        match.jdStatus === 'open'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
-                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
-                      }`}>
-                        {match.jdStatus}
-                      </span>
-                    )}
-                  </div>
+                  <MatchBadge result={match.Result} size="sm" />
                 </div>
                 {match.Reason && (
-                  <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
-                    <span className="font-medium text-gray-700 dark:text-gray-300">AI Reason: </span>
-                    {match.Reason}
-                  </p>
+                  <p className="mt-2 max-w-2xl text-sm text-ink-2">{match.Reason}</p>
                 )}
                 {match.jdText && (
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">
-                      View JD text
+                  <details className="mt-2">
+                    <summary className="micro cursor-pointer select-none text-ink-2 hover:text-ink">
+                      Role description
                     </summary>
-                    <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-relaxed text-gray-800 dark:bg-gray-800 dark:text-gray-200 font-sans">
+                    <pre className="mt-2 whitespace-pre-wrap border-l border-rule pl-4 font-sans text-sm leading-relaxed text-ink-2">
                       {match.jdText}
                     </pre>
                   </details>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 }

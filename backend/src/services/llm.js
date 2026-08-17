@@ -9,7 +9,45 @@ const { GoogleGenAI } = require('@google/genai');
  * retired, and a 404 here should be a config change, not a code change.
  */
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '3', 10);
+const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
+
+/**
+ * Client-side pacing. Gemini's free tier allows 5 requests per minute per
+ * model; exceeding it earns a 429 telling you to come back in ~52 seconds,
+ * which is far more expensive than simply not sending the request yet.
+ *
+ * Slots are reserved synchronously, so concurrent callers queue behind each
+ * other rather than all discovering the limit at once. Set GEMINI_MAX_RPM to
+ * 0 to disable once you are on a paid tier.
+ */
+const MAX_RPM = parseInt(process.env.GEMINI_MAX_RPM || '5', 10);
+const MIN_INTERVAL_MS = MAX_RPM > 0 ? Math.ceil(60000 / MAX_RPM) : 0;
+const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
+
+let nextSlotAt = 0;
+
+async function reserveSlot() {
+  if (!MIN_INTERVAL_MS) return;
+  const now = Date.now();
+  const slot = Math.max(now, nextSlotAt);
+  nextSlotAt = slot + MIN_INTERVAL_MS;
+  if (slot > now) await sleep(slot - now);
+}
+
+/**
+ * Gemini returns the exact wait it wants in the error body. Honour it —
+ * guessing with exponential backoff just burns the retry budget in a
+ * fraction of the time the server asked for.
+ */
+function serverRetryDelayMs(message) {
+  const match = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message || '');
+  if (!match) return null;
+  return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, MAX_BACKOFF_MS);
+}
+
+function isRateLimit(message) {
+  return /\b429\b|RESOURCE_EXHAUSTED|quota/i.test(message || '');
+}
 
 let client = null;
 function getClient() {
@@ -43,6 +81,7 @@ async function generateJson({ system, prompt, schema, model }) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
+      await reserveSlot();
       const response = await ai.models.generateContent({
         model: modelId,
         contents: prompt,
@@ -72,10 +111,22 @@ async function generateJson({ system, prompt, schema, model }) {
       };
     } catch (err) {
       lastError = err;
-      const retryable = RETRYABLE.test(err.message || '');
-      if (!retryable || attempt === MAX_ATTEMPTS) break;
-      const backoff = 500 * 2 ** (attempt - 1) + Math.random() * 250;
-      console.warn(`[llm] attempt ${attempt} failed (${err.message}); retrying in ${Math.round(backoff)}ms`);
+      const message = err.message || '';
+      if (!RETRYABLE.test(message) || attempt === MAX_ATTEMPTS) break;
+
+      // A rate limit carries the server's own retry window; anything else gets
+      // ordinary exponential backoff.
+      const serverDelay = serverRetryDelayMs(message);
+      const backoff = serverDelay !== null
+        ? serverDelay
+        : Math.min(500 * 2 ** (attempt - 1) + Math.random() * 250, MAX_BACKOFF_MS);
+
+      const reason = isRateLimit(message)
+        ? `rate limited (${MAX_RPM || 'unthrottled'} rpm configured)`
+        : message.slice(0, 140);
+      console.warn(
+        `[llm] attempt ${attempt}/${MAX_ATTEMPTS} failed: ${reason}; retrying in ${Math.round(backoff / 1000)}s`
+      );
       await sleep(backoff);
     }
   }

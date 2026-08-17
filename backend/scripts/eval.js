@@ -22,7 +22,9 @@ const jdsRepo = require('../src/repo/jds');
 const args = process.argv.slice(2);
 const LOAD = args.includes('--load');
 const STAGE = (args.find((a) => a.startsWith('--stage=')) || '').split('=')[1] || 'all';
-const CONCURRENCY = parseInt(process.env.EVAL_CONCURRENCY || '4', 10);
+// Default 1: the eval is paced by the shared rate limiter in llm.js, and
+// fanning out on a free-tier key just converts throughput into 429s.
+const CONCURRENCY = parseInt(process.env.EVAL_CONCURRENCY || '1', 10);
 
 async function loadGolden() {
   const file = path.join(__dirname, '..', 'eval', 'golden.json');
@@ -123,7 +125,16 @@ async function run() {
   const openJds = await jdsRepo.listOpen(25);
   console.log(
     `Scoring ${labels.length} cases against prompt ${classifier.PROMPT_VERSION} ` +
-    `with ${openJds.length} open JDs (confidence floor ${classifier.NEEDS_REVIEW_BELOW})\n`
+    `with ${openJds.length} open JDs (confidence floor ${classifier.NEEDS_REVIEW_BELOW})`
+  );
+
+  // Roughly 1.6 calls per case: every case is routed, and those expecting a
+  // verdict are matched as well.
+  const rpm = parseInt(process.env.GEMINI_MAX_RPM || '5', 10);
+  console.log(
+    rpm > 0
+      ? `Paced at ${rpm} req/min — expect about ${Math.ceil((labels.length * 1.6) / rpm)} minute(s).\n`
+      : 'Rate limiting disabled.\n'
   );
 
   const results = await mapLimit(labels, CONCURRENCY, async (label) => {

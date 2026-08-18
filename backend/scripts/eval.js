@@ -152,7 +152,7 @@ async function run() {
 
   // Roughly 1.6 calls per case: every case is routed, and those expecting a
   // verdict are matched as well.
-  const rpm = parseInt(process.env.GEMINI_MAX_RPM || '5', 10);
+  const rpm = parseFloat(process.env.GEMINI_MAX_RPM || '4');
   console.log(
     rpm > 0
       ? `Paced at ${rpm} req/min — expect about ${Math.ceil((labels.length * 1.6) / rpm)} minute(s).\n`

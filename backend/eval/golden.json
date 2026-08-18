@@ -1,79 +1,108 @@
-[
-  {
-    "label": "clear-application-strong",
-    "input_text": "Hi, I have 7 years of React experience and have led frontend teams at two startups. Proficient in TypeScript, Redux Toolkit and React Query. Happy to share my portfolio.",
-    "expected_kind": "application",
-    "expected_verdict": "STRONG",
-    "notes": "Baseline: unambiguous, well-evidenced application."
-  },
-  {
-    "label": "split-message-part-one",
-    "input_text": "Hi sir good evening",
-    "expected_kind": "chatter",
-    "notes": "A greeting on its own is chatter. If this gets classified as an application, batching is not working."
-  },
-  {
-    "label": "split-message-joined",
-    "input_text": "Hi sir good evening\n\nI am interested in the backend role\n\n4 years Node.js, Express and PostgreSQL. Worked on microservices at my current company. Docker basics.",
-    "expected_kind": "application",
-    "expected_verdict": "PARTIAL",
-    "notes": "The same conversation once chained. This is the case the old pipeline got wrong."
-  },
-  {
-    "label": "jd-posting",
-    "input_text": "We are looking for a Senior React Developer with 5+ years building complex SPAs. Must have strong TypeScript, state management (Redux/Zustand), and a track record shipping production apps. Reporting to the frontend lead.",
-    "expected_kind": "job_posting",
-    "notes": "Hiring intent, not a candidate."
-  },
-  {
-    "label": "jd-posting-informal",
-    "input_text": "need 2 devops guys asap. aws, terraform, ci/cd. remote ok. budget 15-20 lpa",
-    "expected_kind": "job_posting",
-    "notes": "Informal posting — commonly misread as chatter."
-  },
-  {
-    "label": "thanks-chatter",
-    "input_text": "Thank you so much sir, waiting for your reply",
-    "expected_kind": "chatter",
-    "notes": "Follow-up politeness should not create a candidate row."
-  },
-  {
-    "label": "scheduling-chatter",
-    "input_text": "Can we do the call at 4pm tomorrow instead? I have a conflict at 2.",
-    "expected_kind": "chatter",
-    "notes": "Logistics inside an existing conversation."
-  },
-  {
-    "label": "bare-interest-unclear",
-    "input_text": "interested",
-    "expected_kind": "unclear",
-    "notes": "Too thin to judge. Should reach a human, not get a confident verdict."
-  },
-  {
-    "label": "cv-attachment-no-text",
-    "input_text": "[document: resume.pdf]",
-    "expected_kind": "unclear",
-    "notes": "Attachment with no extractable text and no context. Belongs in review."
-  },
-  {
-    "label": "designer-claiming-react",
-    "input_text": "I am a designer who knows some React. Can build simple components. Interested in the role.",
-    "expected_kind": "application",
-    "expected_verdict": "WEAK",
-    "notes": "Evidence requirement should stop this being read as a React developer."
-  },
-  {
-    "label": "vague-seniority-claim",
-    "input_text": "I am a senior full stack developer with extensive experience in modern web technologies and a proven track record of delivering scalable solutions.",
-    "expected_kind": "application",
-    "expected_verdict": "NEEDS_REVIEW",
-    "notes": "All adjectives, no quotable specifics. Should not score STRONG on confident tone alone."
-  },
-  {
-    "label": "unrelated-field",
-    "input_text": "I have 10 years experience in hotel management and front office operations. Looking for opportunities.",
-    "expected_kind": "application",
-    "expected_verdict": "NONE",
-    "notes": "Real application, no matching open role."
-  }
-]
+{
+  "_comment": "Hermetic by design. The eval matches against the JDs defined HERE, not against whatever happens to be in the database. Scoring a candidate who claims React experience against 25 arbitrary imported roles measures nothing — NONE would be the correct answer, and the expected verdicts below would be meaningless.",
+
+  "jds": [
+    {
+      "external_id": "EVAL_REACT",
+      "title": "Senior React Developer",
+      "jd_text": "We are looking for a Senior React Developer with 5+ years of experience building complex SPAs. Must have strong TypeScript skills, experience with state management (Redux/Zustand), and a track record of shipping production-grade applications.",
+      "requirements": ["5+ years React", "TypeScript proficiency", "State management (Redux/Zustand)", "Production delivery track record"]
+    },
+    {
+      "external_id": "EVAL_NODE",
+      "title": "Node.js Backend Engineer",
+      "jd_text": "Seeking a Node.js Backend Engineer to design and implement RESTful APIs, manage PostgreSQL databases, and ensure high availability.",
+      "requirements": ["3+ years Node.js / Express", "PostgreSQL or MySQL", "Docker & Kubernetes basics", "Strong problem solving"]
+    },
+    {
+      "external_id": "EVAL_DEVOPS",
+      "title": "DevOps Engineer",
+      "jd_text": "DevOps Engineer to manage CI/CD pipelines, infrastructure as code, and cloud operations on AWS.",
+      "requirements": ["AWS (EC2, ECS, RDS, S3)", "Terraform or Pulumi", "GitHub Actions / Jenkins", "On-call readiness"]
+    }
+  ],
+
+  "cases": [
+    {
+      "label": "clear-application-strong",
+      "input_text": "Hi, I have 7 years of React experience and have led frontend teams at two startups. Proficient in TypeScript, Redux Toolkit, and React Query. Happy to share my portfolio.",
+      "expected_kind": "application",
+      "expected_verdict": "STRONG",
+      "jd_external_id": "EVAL_REACT",
+      "notes": "Baseline: unambiguous, well-evidenced application."
+    },
+    {
+      "label": "split-message-part-one",
+      "input_text": "Hi sir good evening",
+      "expected_kind": "chatter",
+      "notes": "A greeting alone is chatter. Classified as an application means batching is broken."
+    },
+    {
+      "label": "split-message-joined",
+      "input_text": "Hi sir good evening\n\nI am interested in the backend role\n\n4 years Node.js, Express and PostgreSQL. Worked on microservices at my current company. Docker basics.",
+      "expected_kind": "application",
+      "expected_verdict": "STRONG",
+      "jd_external_id": "EVAL_NODE",
+      "notes": "The same conversation once chained. This is the case the old pipeline got wrong."
+    },
+    {
+      "label": "jd-posting",
+      "input_text": "We are looking for a Senior React Developer with 5+ years building complex SPAs. Must have strong TypeScript, state management (Redux/Zustand), and a track record shipping production apps. Reporting to the frontend lead.",
+      "expected_kind": "job_posting",
+      "notes": "Hiring intent, not a candidate."
+    },
+    {
+      "label": "jd-posting-informal",
+      "input_text": "need 2 devops guys asap. aws, terraform, ci/cd. remote ok. budget 15-20 lpa",
+      "expected_kind": "job_posting",
+      "notes": "Informal posting — commonly misread as chatter."
+    },
+    {
+      "label": "thanks-chatter",
+      "input_text": "Thank you so much sir, waiting for your reply",
+      "expected_kind": "chatter",
+      "notes": "Follow-up politeness should not create a candidate row."
+    },
+    {
+      "label": "scheduling-chatter",
+      "input_text": "Can we do the call at 4pm tomorrow instead? I have a conflict at 2.",
+      "expected_kind": "chatter",
+      "notes": "Logistics inside an existing conversation."
+    },
+    {
+      "label": "bare-interest-unclear",
+      "input_text": "interested",
+      "expected_kind": "unclear",
+      "notes": "Too thin to judge. Should reach a human, not get a confident verdict."
+    },
+    {
+      "label": "cv-attachment-no-text",
+      "input_text": "[document: resume.pdf]",
+      "expected_kind": "unclear",
+      "notes": "Attachment whose text could not be extracted, with no accompanying message. Belongs in review — there is nothing to classify."
+    },
+    {
+      "label": "designer-claiming-react",
+      "input_text": "I am a designer who knows some React. Can build simple components. Interested in the role.",
+      "expected_kind": "application",
+      "expected_verdict": "WEAK",
+      "jd_external_id": "EVAL_REACT",
+      "notes": "Evidence requirement should stop this being read as a senior React developer."
+    },
+    {
+      "label": "vague-seniority-claim",
+      "input_text": "I am a senior full stack developer with extensive experience in modern web technologies and a proven track record of delivering scalable solutions.",
+      "expected_kind": "application",
+      "expected_verdict": "NEEDS_REVIEW",
+      "jd_external_id": "EVAL_REACT",
+      "notes": "All adjectives, no quotable specifics. Must not score STRONG on confident tone alone."
+    },
+    {
+      "label": "unrelated-field",
+      "input_text": "I have 10 years experience in hotel management and front office operations. Looking for opportunities.",
+      "expected_kind": "application",
+      "expected_verdict": "NONE",
+      "notes": "Real application, no matching open role."
+    }
+  ]
+}

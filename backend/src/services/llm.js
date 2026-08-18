@@ -23,6 +23,7 @@ const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
 const MAX_RPM = parseInt(process.env.GEMINI_MAX_RPM || '5', 10);
 const MIN_INTERVAL_MS = MAX_RPM > 0 ? Math.ceil(60000 / MAX_RPM) : 0;
 const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
+const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '4096', 10);
 
 let nextSlotAt = 0;
 
@@ -59,7 +60,9 @@ function getClient() {
   return client;
 }
 
-const RETRYABLE = /429|500|502|503|504|overloaded|unavailable|deadline|ECONNRESET|ETIMEDOUT/i;
+// TRUNCATED_JSON / INVALID_JSON are retryable because the temperature nudge
+// above gives the next attempt a genuine chance of landing differently.
+const RETRYABLE = /429|500|502|503|504|overloaded|unavailable|deadline|ECONNRESET|ETIMEDOUT|TRUNCATED_JSON|INVALID_JSON/i;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,8 +92,13 @@ async function generateJson({ system, prompt, schema, model }) {
           systemInstruction: system,
           responseMimeType: 'application/json',
           responseSchema: schema,
-          // Classification wants the same answer for the same input, not variety.
-          temperature: 0,
+          // Classification wants the same answer for the same input, not
+          // variety — but temperature 0 can fall into a degenerate repetition
+          // loop that runs until the output cap and truncates the JSON. When
+          // that happens, retrying identically reproduces it exactly, so each
+          // retry nudges temperature just enough to break the loop.
+          temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
         },
       });
 
@@ -100,8 +108,14 @@ async function generateJson({ system, prompt, schema, model }) {
       let data;
       try {
         data = JSON.parse(text);
-      } catch (err) {
-        throw new Error(`model returned non-JSON: ${text.slice(0, 300)}`);
+      } catch {
+        const finish = response.candidates && response.candidates[0]
+          && response.candidates[0].finishReason;
+        const truncated = finish === 'MAX_TOKENS' || !/[}\]]\s*$/.test(text.trim());
+        throw new Error(
+          `${truncated ? 'TRUNCATED_JSON' : 'INVALID_JSON'} (finishReason=${finish || 'unknown'}): ` +
+          text.slice(0, 200)
+        );
       }
 
       return {

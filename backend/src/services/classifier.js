@@ -5,7 +5,7 @@ const { generateJson } = require('./llm');
  * classification row, so you can tell which prompt produced which verdict and
  * diff two versions over the same submissions.
  */
-const PROMPT_VERSION = 'v2-two-stage';
+const PROMPT_VERSION = 'v3-two-stage';
 
 const NEEDS_REVIEW_BELOW = parseFloat(process.env.CONFIDENCE_FLOOR || '0.6');
 
@@ -39,6 +39,14 @@ Two rules that matter more than the rest:
    decide whether this block CONTINUES an earlier application or posting (for
    example, a CV arriving after the introduction). Set continues_previous when
    it does. Do not classify the context itself.
+
+3. Attachments appear as a bracketed marker such as "[document: resume.pdf]".
+   That marker means the file's text could NOT be read — it is a placeholder,
+   not content. A block whose only substance is such a marker is "unclear":
+   there is nothing to categorise, and a human needs to open the file. Do not
+   assume a PDF named "resume" is an application; that is a guess about a file
+   you cannot see. If the marker is accompanied by real text, judge that text
+   normally and ignore the marker.
 
 Prefer "unclear" over guessing. A low-confidence guess is worse than an honest
 flag, because unclear items get a human review and wrong guesses do not.`;

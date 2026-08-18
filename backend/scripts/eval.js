@@ -26,9 +26,17 @@ const STAGE = (args.find((a) => a.startsWith('--stage=')) || '').split('=')[1] |
 // fanning out on a free-tier key just converts throughput into 429s.
 const CONCURRENCY = parseInt(process.env.EVAL_CONCURRENCY || '1', 10);
 
-async function loadGolden() {
+function readGoldenFile() {
   const file = path.join(__dirname, '..', 'eval', 'golden.json');
-  const items = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  // Older versions of this file were a bare array of cases.
+  return Array.isArray(parsed)
+    ? { file, jds: [], cases: parsed }
+    : { file, jds: parsed.jds || [], cases: parsed.cases || [] };
+}
+
+async function loadGolden() {
+  const { file, cases: items } = readGoldenFile();
 
   await query('TRUNCATE golden_labels RESTART IDENTITY');
   for (const item of items) {
@@ -122,10 +130,24 @@ async function run() {
     return;
   }
 
-  const openJds = await jdsRepo.listOpen(25);
+  // Match against the fixture JDs from the golden file, never the database.
+  // Scoring "7 years of React" against whatever 25 roles happen to be open
+  // measures nothing: NONE is the right answer when no React role exists, so
+  // the expected verdicts would be meaningless and the run unrepeatable.
+  const { jds: fixtureJds } = readGoldenFile();
+  const openJds = fixtureJds.map((j) => ({
+    external_id: j.external_id,
+    title: j.title,
+    jd_text: j.jd_text,
+    requirements: j.requirements || [],
+  }));
+
+  if (openJds.length === 0) {
+    console.log('No fixture JDs in eval/golden.json — stage 2 cannot be scored.');
+  }
   console.log(
-    `Scoring ${labels.length} cases against prompt ${classifier.PROMPT_VERSION} ` +
-    `with ${openJds.length} open JDs (confidence floor ${classifier.NEEDS_REVIEW_BELOW})`
+    `Scoring ${labels.length} cases with prompt ${classifier.PROMPT_VERSION} ` +
+    `against ${openJds.length} fixture JDs (confidence floor ${classifier.NEEDS_REVIEW_BELOW})`
   );
 
   // Roughly 1.6 calls per case: every case is routed, and those expecting a
@@ -142,6 +164,7 @@ async function run() {
       const routed = await classifier.route({ text: label.input_text, contextMessages: [] });
       let verdict = null;
       let confidence = routed.confidence;
+      let matchedJd = null;
 
       if (
         STAGE !== 'router' &&
@@ -152,11 +175,12 @@ async function run() {
         const scored = classifier.applyConfidenceFloor(raw);
         verdict = scored.verdict;
         confidence = scored.confidence;
+        matchedJd = scored.jdExternalId;
       }
 
-      return { label, kind: routed.kind, verdict, confidence, error: null };
+      return { label, kind: routed.kind, verdict, confidence, matchedJd, error: null };
     } catch (err) {
-      return { label, kind: null, verdict: null, confidence: null, error: err.message };
+      return { label, kind: null, verdict: null, confidence: null, matchedJd: null, error: err.message };
     }
   });
 
@@ -191,7 +215,8 @@ async function run() {
     (r) =>
       !r.error &&
       ((r.label.expected_kind && r.kind !== r.label.expected_kind) ||
-        (r.label.expected_verdict && r.verdict && r.verdict !== r.label.expected_verdict))
+        (r.label.expected_verdict && r.verdict && r.verdict !== r.label.expected_verdict) ||
+        (r.label.jd_external_id && r.matchedJd && r.matchedJd !== r.label.jd_external_id))
   );
 
   if (misses.length) {
@@ -200,6 +225,13 @@ async function run() {
       console.log(`\n${m.label.label}`);
       console.log(`  expected: kind=${m.label.expected_kind || '-'} verdict=${m.label.expected_verdict || '-'}`);
       console.log(`  got:      kind=${m.kind || '-'} verdict=${m.verdict || '-'} confidence=${m.confidence ?? '-'}`);
+      if (m.label.jd_external_id || m.matchedJd) {
+        const wrongRole = m.matchedJd !== m.label.jd_external_id;
+        console.log(
+          `  role:     expected=${m.label.jd_external_id || '-'} matched=${m.matchedJd || 'NONE'}` +
+          (wrongRole ? '   <-- matched the wrong role' : '')
+        );
+      }
       if (m.label.notes) console.log(`  note:     ${m.label.notes}`);
       console.log(`  input:    ${m.label.input_text.slice(0, 120).replace(/\n/g, ' ⏎ ')}`);
     }

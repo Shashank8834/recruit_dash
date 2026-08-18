@@ -261,8 +261,9 @@ function printEstimate(submissions) {
  * into a submission. After a prompt or budgeting change the verdicts already
  * on disk are the stale ones, and nothing else revisits them.
  *
- * Selection is by prompt_version, which makes the run RESUMABLE: each
- * submission that succeeds moves to the current version and drops out of the
+ * Selection is by prompt_version and by whether the matched role is still
+ * open, which makes the run RESUMABLE: each submission that succeeds moves to
+ * the current version and matches against live roles, so it drops out of the
  * next run's query. On a metered tier that matters — this is a job you expect
  * to stop and restart with --limit until the backlog clears.
  *
@@ -272,14 +273,24 @@ function printEstimate(submissions) {
  */
 async function reclassifyPhase() {
   const since = Math.floor(Date.now() / 1000) - DAYS * 86400;
+  // A verdict also goes stale when the ROLES change, not just the prompt.
+  // Closing or demoting a job description silently invalidates every verdict
+  // that pointed at it: the candidate was matched against a role that is no
+  // longer in the candidate set, and re-running the same prompt version would
+  // now reach a different answer. Selecting on prompt_version alone left those
+  // verdicts on screen indefinitely, still naming a role the matcher would no
+  // longer offer — which is the most misleading state the dashboard can be in,
+  // because the row looks decided.
   const { rows: stale } = await query(
     `SELECT DISTINCT s.id, s.created_at, s.status
        FROM submissions s
        LEFT JOIN classifications c ON c.submission_id = s.id AND c.is_current
+       LEFT JOIN jds j ON j.id = c.jd_id
       WHERE s.created_at >= to_timestamp($1)
         AND (
           s.status = 'failed'
           OR (c.id IS NOT NULL AND c.prompt_version IS DISTINCT FROM $2)
+          OR (c.jd_id IS NOT NULL AND j.status IS DISTINCT FROM 'open')
         )
       ORDER BY s.created_at DESC`,
     [since, classifier.PROMPT_VERSION]
@@ -287,7 +298,8 @@ async function reclassifyPhase() {
 
   console.log(
     `${stale.length} submission(s) in the last ${DAYS} day(s) are not on ` +
-    `prompt ${classifier.PROMPT_VERSION} (or previously failed).`
+    `prompt ${classifier.PROMPT_VERSION}, were matched to a role that is no ` +
+    'longer open, or previously failed.'
   );
   printEstimate(stale.length);
 

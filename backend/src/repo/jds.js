@@ -1,10 +1,10 @@
 const { query } = require('../db');
 
-async function create({ submissionId, title, postedBy, jdText, requirements, postedAt }, client) {
+async function create({ submissionId, title, postedBy, jdText, requirements, postedAt, status }, client) {
   const run = client ? client.query.bind(client) : query;
   const { rows } = await run(
-    `INSERT INTO jds (external_id, submission_id, title, posted_by, jd_text, requirements, posted_at)
-     VALUES ('pending', $1, $2, $3, $4, $5, COALESCE($6, now()))
+    `INSERT INTO jds (external_id, submission_id, title, posted_by, jd_text, requirements, posted_at, status)
+     VALUES ('pending', $1, $2, $3, $4, $5, COALESCE($6, now()), $7)
      RETURNING *`,
     [
       submissionId || null,
@@ -13,6 +13,7 @@ async function create({ submissionId, title, postedBy, jdText, requirements, pos
       jdText,
       JSON.stringify(requirements || []),
       postedAt || null,
+      status || 'open',
     ]
   );
   // external_id is derived from the serial id so it stays stable and readable
@@ -75,8 +76,53 @@ async function setStatus(externalId, status) {
   return rows[0] || null;
 }
 
+/**
+ * Folds a continuation message into the posting it belongs to.
+ *
+ * The follow-up is appended rather than replacing anything, because either
+ * message may hold the part that matters — the description often arrives
+ * first and the requirements second, or the reverse. Title and requirements
+ * are filled in only where the posting had none: a later fragment saying
+ * "send me your resume" must not blank out requirements the first message
+ * already established.
+ *
+ * Promotes a draft to open, since the combined posting is now a role worth
+ * matching against even if neither half was on its own.
+ */
+async function appendContinuation(id, { jdText, title, requirements }, client) {
+  const run = client ? client.query.bind(client) : query;
+  const { rows } = await run(
+    `UPDATE jds
+        SET jd_text      = jd_text || E'
+
+' || $2,
+            title        = COALESCE(title, $3),
+            requirements = CASE
+                             WHEN jsonb_array_length(requirements) = 0
+                             THEN $4::jsonb
+                             ELSE requirements
+                           END,
+            status       = CASE WHEN status = 'draft' THEN 'open' ELSE status END
+      WHERE id = $1
+      RETURNING *`,
+    [id, jdText, title || null, JSON.stringify(requirements || [])]
+  );
+  return rows[0] || null;
+}
+
+/** The JD a submission produced, if it produced one. */
+async function findBySubmissionId(submissionId) {
+  const { rows } = await query(
+    'SELECT * FROM jds WHERE submission_id = $1 ORDER BY id DESC LIMIT 1',
+    [submissionId]
+  );
+  return rows[0] || null;
+}
+
 module.exports = {
   create,
+  appendContinuation,
+  findBySubmissionId,
   listOpen,
   listBetween,
   findByExternalId,

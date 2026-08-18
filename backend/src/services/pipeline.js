@@ -10,6 +10,10 @@ const classifier = require('./classifier');
 const media = require('./media');
 
 const CONTEXT_MESSAGES = parseInt(process.env.CLASSIFIER_CONTEXT_MESSAGES || '12', 10);
+
+// Below this length, a posting carrying neither a title nor requirements is
+// treated as the tail of an earlier one rather than a role in its own right.
+const FRAGMENT_CHARS = parseInt(process.env.JD_FRAGMENT_CHARS || '200', 10);
 /**
  * How many open roles the matcher scores a candidate against, newest first.
  *
@@ -92,7 +96,65 @@ async function classifySubmission(submission, batchMessages) {
   return handleNonActionable(submission, routed);
 }
 
+/**
+ * A posting the model produced no title and no requirements for, and that is
+ * too short to contain either.
+ *
+ * Recruiters split a posting across messages, and the trailing half —
+ * "anyone interested, please send your resume to me" — is a job posting by
+ * every reasonable reading, so the router is right to call it one. It is just
+ * not a *role*: there is nothing in it to match a candidate against.
+ *
+ * Left open, such a row is worse than useless. A role with no requirements is
+ * a role every candidate satisfies, so the matcher preferred it over the real
+ * openings and returned STRONG for people it had nothing to judge — its own
+ * stated reason being that this was "the only open role without specific
+ * experience or qualification requirements". One unchained fragment quietly
+ * pulled candidates off every genuine posting.
+ */
+function isFragment(routed, text) {
+  const hasTitle = Boolean(routed.job && routed.job.title);
+  const hasRequirements = Boolean(routed.job && (routed.job.requirements || []).length);
+  return !hasTitle && !hasRequirements && (text || '').trim().length < FRAGMENT_CHARS;
+}
+
 async function handleJobPosting(submission, routed) {
+  // Postings are split across messages exactly as applications are — the
+  // description in one, "send me your resume" in the next — but only
+  // applications were being rejoined, so every follow-up became a role of its
+  // own. Fold it into the posting it continues instead.
+  if (routed.continuesPrevious) {
+    const previous = await submissionsRepo.latestJobPostingForChat(
+      submission.chat_id,
+      submission.id
+    );
+    const previousJd = previous ? await jdsRepo.findBySubmissionId(previous.id) : null;
+
+    if (previousJd) {
+      const merged = await jdsRepo.appendContinuation(previousJd.id, {
+        jdText: submission.combined_text,
+        title: routed.job.title,
+        requirements: routed.job.requirements || [],
+      });
+      await submissionsRepo.markClassified(submission.id, {
+        kind: routed.kind,
+        kindConfidence: routed.confidence,
+      });
+      await sheetMirror.enqueue('jd', merged.id, 'upsert');
+      return {
+        kind: 'job_posting',
+        jdExternalId: merged.external_id,
+        continuesJdId: merged.id,
+      };
+    }
+    // No posting to attach to — fall through and let the fragment check below
+    // decide whether this stands on its own.
+  }
+
+  // A fragment with nothing to attach to is still recorded, because it is a
+  // real message and the missing half may yet arrive; it is just kept out of
+  // the matcher's candidate set until a human or a continuation completes it.
+  const draft = isFragment(routed, submission.combined_text);
   const jd = await jdsRepo.create({
     submissionId: submission.id,
     title: routed.job.title,
@@ -100,7 +162,16 @@ async function handleJobPosting(submission, routed) {
     jdText: submission.combined_text,
     requirements: routed.job.requirements || [],
     postedAt: submission.window_end,
+    status: draft ? 'draft' : 'open',
   });
+
+  if (draft) {
+    console.warn(
+      `[pipeline] ${jd.external_id} has no title and no requirements; ` +
+      'kept as a draft so it cannot match every candidate. ' +
+      'Open it from the dashboard if it is a real role.'
+    );
+  }
 
   await submissionsRepo.markClassified(submission.id, {
     kind: routed.kind,
@@ -108,7 +179,7 @@ async function handleJobPosting(submission, routed) {
   });
   await sheetMirror.enqueue('jd', jd.id, 'upsert');
 
-  return { kind: 'job_posting', jdExternalId: jd.external_id };
+  return { kind: 'job_posting', jdExternalId: jd.external_id, status: jd.status };
 }
 
 async function handleApplication(submission, routed) {

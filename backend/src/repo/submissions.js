@@ -101,6 +101,30 @@ async function latestApplicationForChat(chatId, excludeId) {
   return rows[0] || null;
 }
 
+/**
+ * The posting this chat was most recently working on, so a follow-up message
+ * can be attached to it rather than becoming a role of its own.
+ *
+ * Window-limited on purpose. A recruiter's "send me your resume" belongs to the
+ * description they posted a minute ago, not to one from last Tuesday, and
+ * without a bound every stray fragment would be folded into whatever posting
+ * happened to be newest in the chat.
+ */
+async function latestJobPostingForChat(chatId, excludeId, withinMinutes = 30) {
+  const { rows } = await query(
+    `SELECT * FROM submissions
+      WHERE chat_id = $1
+        AND kind = 'job_posting'
+        AND status = 'classified'
+        AND ($2::bigint IS NULL OR id <> $2)
+        AND created_at > now() - make_interval(mins => $3)
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [chatId, excludeId || null, withinMinutes]
+  );
+  return rows[0] || null;
+}
+
 module.exports = {
   create,
   updateCombinedText,
@@ -108,5 +132,6 @@ module.exports = {
   markFailed,
   findById,
   latestApplicationForChat,
+  latestJobPostingForChat,
   buildCombinedText,
 };

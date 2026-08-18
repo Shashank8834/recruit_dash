@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
-import EvidenceList from '../components/EvidenceList';
 import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
 
@@ -197,11 +196,6 @@ export default function CandidateDetail() {
         {applicant.Reason && (
           <p className="max-w-2xl text-sm leading-relaxed text-ink-2">{applicant.Reason}</p>
         )}
-
-        <div className="space-y-2">
-          <p className="micro">Evidence</p>
-          <EvidenceList evidence={applicant.evidence} />
-        </div>
 
         {/* Human override */}
         <div className="border border-rule bg-surface px-5 py-4">

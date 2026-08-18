@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
-import EvidenceList from '../components/EvidenceList';
 import MessageThread from '../components/MessageThread';
 import { formatDateTime } from '../lib/utils';
 
@@ -111,17 +110,6 @@ function ReviewCard({ item, index, onResolved }) {
               {item.jd_external_id}
             </button>
           </div>
-        )}
-
-        {item.evidence?.length > 0 && (
-          <details>
-            <summary className="micro cursor-pointer select-none text-ink hover:text-ink-2">
-              Evidence ({item.evidence.length})
-            </summary>
-            <div className="mt-3">
-              <EvidenceList evidence={item.evidence} />
-            </div>
-          </details>
         )}
 
         <div>

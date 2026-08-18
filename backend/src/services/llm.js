@@ -102,7 +102,12 @@ function sleep(ms) {
  */
 function serverRetryDelayMs(message) {
   const match =
+    // Gemini: {"retryDelay": "52s"}
     /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message || '') ||
+    // Groq states it in prose: "Please try again in 31.0125s". Without this the
+    // backoff fell through to the exponential guess and retried after ~1s,
+    // inside a window the server had just said was exhausted for half a minute.
+    /try again in\s*(\d+(?:\.\d+)?)\s*s/i.exec(message || '') ||
     /retry[- ]after[:= ]+(\d+(?:\.\d+)?)/i.exec(message || '');
   if (!match) return null;
   return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, MAX_BACKOFF_MS);
@@ -121,6 +126,40 @@ function serverRetryDelayMs(message) {
  */
 function isTokenLimit(message) {
   return /TOKEN_LIMIT/.test(message || '');
+}
+
+/**
+ * Decides, from a provider's error response, whether the request was too big
+ * or the minute's budget was simply spent.
+ *
+ * These are hard to tell apart and expensive to confuse. Groq describes both
+ * with the same "on tokens per minute (TPM)" wording and, for a period,
+ * returned 429 for both:
+ *
+ *   too large:  "Request too large for model X ... Limit 8000, Requested 8222,
+ *                please reduce your message size and try again"
+ *   exhausted:  "Rate limit reached for model X ... Limit 8000, Used 7311,
+ *                Requested 4824. Please try again in 31.0125s"
+ *
+ * Matching on the TPM phrase tagged the second as the first, so the classifier
+ * halved a prompt that was never oversized and retried immediately into a
+ * window the server had said was exhausted for the next 31 seconds — failing
+ * repeatedly while shrinking the prompt toward uselessness.
+ *
+ * The instruction the provider gives is the signal that separates them:
+ * *reduce* versus *wait*. Note that the exhausted message also contains
+ * "Requested", so any test on the numbers alone matches both.
+ *
+ * Unrecognised errors fall through to the rate-limit path deliberately. That
+ * is the safer default: waiting on a genuinely oversized request costs a
+ * pause, while shrinking on a genuine rate limit spends quota reproducing the
+ * same failure and degrades the prompt on the way.
+ */
+function isOversizedRequest(status, body) {
+  if (status === 413) return true;
+  return /request too large|reduce your message size|context length|maximum context/i.test(
+    body || ''
+  );
 }
 
 function isRateLimit(message) {
@@ -209,13 +248,13 @@ async function callOpenAICompatible({ system, prompt, schema, model, attempt, ma
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       const retryAfter = response.headers.get('retry-after');
-      // Providers retire model ids regularly. A bare 404 sends people hunting
-      // through docs; name the cause and the command that resolves it.
-      if (response.status === 413 || /too large|tokens per minute \(TPM\)|context length/i.test(body)) {
+      if (isOversizedRequest(response.status, body)) {
         // Distinct from a rate limit: waiting cannot help, because a single
         // request exceeds the ceiling. The caller has to send less.
         throw new Error(`TOKEN_LIMIT ${response.status} ${body.slice(0, 240)}`);
       }
+      // Providers retire model ids regularly. A bare 404 sends people hunting
+      // through docs; name the cause and the command that resolves it.
       const hint =
         response.status === 404 || /model_not_found|does not exist/i.test(body)
           ? `
@@ -346,4 +385,15 @@ async function generateJson({ system, prompt, schema, model, maxOutputTokens }) 
   throw lastError;
 }
 
-module.exports = { generateJson, estimateTokens, MODEL, PROVIDER, MAX_RPM, MAX_TPM };
+module.exports = {
+  generateJson,
+  estimateTokens,
+  // Exported for tests. Both are one word away from their opposite and both
+  // failed silently in production before they were pinned.
+  isOversizedRequest,
+  serverRetryDelayMs,
+  MODEL,
+  PROVIDER,
+  MAX_RPM,
+  MAX_TPM,
+};

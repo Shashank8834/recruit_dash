@@ -1,151 +1,240 @@
-const { GoogleGenAI } = require('@google/genai');
 const rateLimiter = require('./rateLimiter');
 
 /**
  * The only file that talks to a model provider. Everything upstream deals in
- * (systemInstruction, prompt, schema) -> parsed JSON, so swapping providers is
- * a change to this file alone.
+ * (system, prompt, schema) -> parsed JSON, so switching providers is a config
+ * change rather than a code change.
  *
- * GEMINI_MODEL is env-configurable on purpose: model IDs get renamed and
- * retired, and a 404 here should be a config change, not a code change.
- */
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
-
-/**
- * Client-side pacing. Gemini's free tier allows 5 requests per minute per
- * model; exceeding it earns a 429 telling you to come back in ~52 seconds,
- * which is far more expensive than simply not sending the request yet.
+ * Two backends:
  *
- * Slots are reserved synchronously, so concurrent callers queue behind each
- * other rather than all discovering the limit at once. Set GEMINI_MAX_RPM to
- * 0 to disable once you are on a paid tier.
+ *   gemini   Google's native API, via @google/genai. Enforces the response
+ *            schema server-side.
  *
- * The budget is shared across processes via Postgres (see rateLimiter.js).
+ *   openai   Any OpenAI-compatible /chat/completions endpoint — Groq,
+ *            OpenRouter, Cerebras, Together, a local Ollama. One
+ *            implementation covers all of them because they share a wire
+ *            format. JSON is requested via response_format and the schema is
+ *            stated in the system prompt, because schema enforcement is not
+ *            universally supported; the shape is then checked below.
+ *
+ * The request budget is shared across processes via Postgres (rateLimiter.js).
  * It has to be: the API server, the worker and each one-shot script are
- * separate processes on one API key, and an in-process counter resets to zero
- * on every invocation — so a script re-run seconds later would fire straight
- * into a window the previous run had already spent.
- *
- * The default sits just under the documented limit, because the provider's
- * window boundaries need slack and every retry consumes a slot of its own.
+ * separate processes on one key, and an in-process counter resets to zero on
+ * every invocation.
  */
-const MAX_RPM = parseFloat(process.env.GEMINI_MAX_RPM || '4');
+const PROVIDER = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
 
+const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
 const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
 const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '4096', 10);
+const REQUEST_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10);
 
-/**
- * Gemini returns the exact wait it wants in the error body. Honour it —
- * guessing with exponential backoff just burns the retry budget in a
- * fraction of the time the server asked for.
- */
-function serverRetryDelayMs(message) {
-  const match = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message || '');
-  if (!match) return null;
-  return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, MAX_BACKOFF_MS);
-}
+// The GEMINI_* names came first; they are still honoured so existing .env
+// files keep working after a provider switch.
+const MAX_RPM = parseFloat(process.env.LLM_MAX_RPM || process.env.GEMINI_MAX_RPM || '4');
+const MODEL = process.env.LLM_MODEL || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 
-function isRateLimit(message) {
-  return /\b429\b|RESOURCE_EXHAUSTED|quota/i.test(message || '');
-}
-
-let client = null;
-function getClient() {
-  if (!client) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
-    client = new GoogleGenAI({ apiKey });
-  }
-  return client;
-}
-
-// TRUNCATED_JSON / INVALID_JSON are retryable because the temperature nudge
-// above gives the next attempt a genuine chance of landing differently.
-const RETRYABLE = /429|500|502|503|504|overloaded|unavailable|deadline|ECONNRESET|ETIMEDOUT|TRUNCATED_JSON|INVALID_JSON/i;
+const RETRYABLE =
+  /429|500|502|503|504|overloaded|unavailable|deadline|ECONNRESET|ETIMEDOUT|TRUNCATED_JSON|INVALID_JSON|SCHEMA_MISMATCH/i;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Calls the model with a response schema and returns parsed JSON.
- * @param {object}  opts
- * @param {string}  opts.system      System instruction.
- * @param {string}  opts.prompt      User content.
- * @param {object}  opts.schema      Response schema (JSON-Schema subset).
- * @param {string} [opts.model]      Override the default model.
+ * Providers state how long to wait when they rate limit. Honour it — guessing
+ * with exponential backoff burns the retry budget in a fraction of the window
+ * the server actually asked for.
+ */
+function serverRetryDelayMs(message) {
+  const match =
+    /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message || '') ||
+    /retry[- ]after[:= ]+(\d+(?:\.\d+)?)/i.exec(message || '');
+  if (!match) return null;
+  return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, MAX_BACKOFF_MS);
+}
+
+function isRateLimit(message) {
+  return /\b429\b|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(message || '');
+}
+
+/* ------------------------------------------------------------------ */
+/* Gemini                                                              */
+/* ------------------------------------------------------------------ */
+
+let geminiClient = null;
+function getGemini() {
+  if (!geminiClient) {
+    const { GoogleGenAI } = require('@google/genai');
+    const apiKey = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY (or LLM_API_KEY) is not set');
+    geminiClient = new GoogleGenAI({ apiKey });
+  }
+  return geminiClient;
+}
+
+async function callGemini({ system, prompt, schema, model, attempt }) {
+  const response = await getGemini().models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      systemInstruction: system,
+      responseMimeType: 'application/json',
+      responseSchema: schema,
+      // Temperature 0 can fall into a repetition loop that runs to the output
+      // cap and truncates the JSON; an identical retry reproduces it exactly,
+      // so each retry nudges just enough to break the loop.
+      temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+    },
+  });
+
+  const finishReason =
+    response.candidates && response.candidates[0] && response.candidates[0].finishReason;
+  return { text: response.text, finishReason, usage: response.usageMetadata || null };
+}
+
+/* ------------------------------------------------------------------ */
+/* OpenAI-compatible (Groq, OpenRouter, Cerebras, Together, Ollama)     */
+/* ------------------------------------------------------------------ */
+
+function describeSchema(schema) {
+  return (
+    'Reply with a single JSON object and nothing else — no prose, no code ' +
+    'fences. It must conform to this JSON Schema:\n' +
+    JSON.stringify(schema, null, 2)
+  );
+}
+
+async function callOpenAICompatible({ system, prompt, schema, model, attempt }) {
+  const base = (process.env.LLM_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/+$/, '');
+  const apiKey = process.env.LLM_API_KEY;
+  if (!apiKey) throw new Error('LLM_API_KEY is not set');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [
+          // The schema goes in the system prompt: response_format json_object
+          // guarantees valid JSON but not the right shape, and json_schema is
+          // not supported by every compatible provider.
+          { role: 'system', content: `${system}\n\n${describeSchema(schema)}` },
+          { role: 'user', content: prompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
+        max_tokens: MAX_OUTPUT_TOKENS,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      const retryAfter = response.headers.get('retry-after');
+      throw new Error(
+        `${response.status} ${body.slice(0, 300)}` +
+        (retryAfter ? ` retry-after: ${retryAfter}` : '')
+      );
+    }
+
+    const data = await response.json();
+    const choice = data.choices && data.choices[0];
+    return {
+      text: choice && choice.message && choice.message.content,
+      finishReason: choice && choice.finish_reason,
+      usage: data.usage || null,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * Shape check for providers that cannot enforce the schema themselves. Only
+ * top-level required fields are verified — enough to catch a model that
+ * answered in prose or invented its own envelope, without reimplementing a
+ * JSON Schema validator.
+ */
+function assertShape(data, schema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('SCHEMA_MISMATCH: expected a JSON object');
+  }
+  const required = (schema && schema.required) || [];
+  const missing = required.filter((key) => data[key] === undefined);
+  if (missing.length) {
+    throw new Error(`SCHEMA_MISMATCH: missing required field(s) ${missing.join(', ')}`);
+  }
+}
+
+/**
+ * Calls the configured provider and returns parsed JSON.
  * @returns {Promise<{data: object, model: string, usage: object}>}
  */
 async function generateJson({ system, prompt, schema, model }) {
-  const ai = getClient();
   const modelId = model || MODEL;
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
       await rateLimiter.acquire(MAX_RPM);
-      const response = await ai.models.generateContent({
-        model: modelId,
-        contents: prompt,
-        config: {
-          systemInstruction: system,
-          responseMimeType: 'application/json',
-          responseSchema: schema,
-          // Classification wants the same answer for the same input, not
-          // variety — but temperature 0 can fall into a degenerate repetition
-          // loop that runs until the output cap and truncates the JSON. When
-          // that happens, retrying identically reproduces it exactly, so each
-          // retry nudges temperature just enough to break the loop.
-          temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-        },
+
+      const call = PROVIDER === 'gemini' ? callGemini : callOpenAICompatible;
+      const { text, finishReason, usage } = await call({
+        system, prompt, schema, model: modelId, attempt,
       });
 
-      const text = response.text;
       if (!text) throw new Error('empty response from model');
 
       let data;
       try {
-        data = JSON.parse(text);
+        // Some providers wrap JSON in a code fence despite being asked not to.
+        const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/, '');
+        data = JSON.parse(cleaned);
       } catch {
-        const finish = response.candidates && response.candidates[0]
-          && response.candidates[0].finishReason;
-        const truncated = finish === 'MAX_TOKENS' || !/[}\]]\s*$/.test(text.trim());
+        const truncated =
+          finishReason === 'MAX_TOKENS' ||
+          finishReason === 'length' ||
+          !/[}\]]\s*$/.test(text.trim());
         throw new Error(
-          `${truncated ? 'TRUNCATED_JSON' : 'INVALID_JSON'} (finishReason=${finish || 'unknown'}): ` +
-          text.slice(0, 200)
+          `${truncated ? 'TRUNCATED_JSON' : 'INVALID_JSON'} ` +
+          `(finishReason=${finishReason || 'unknown'}): ${text.slice(0, 200)}`
         );
       }
 
-      return {
-        data,
-        model: modelId,
-        usage: response.usageMetadata || null,
-      };
+      if (PROVIDER !== 'gemini') assertShape(data, schema);
+
+      return { data, model: modelId, usage };
     } catch (err) {
       lastError = err;
       const message = err.message || '';
       if (!RETRYABLE.test(message) || attempt === MAX_ATTEMPTS) break;
 
-      // A rate limit carries the server's own retry window; anything else gets
-      // ordinary exponential backoff.
       const serverDelay = serverRetryDelayMs(message);
-      const backoff = serverDelay !== null
-        ? serverDelay
-        : Math.min(500 * 2 ** (attempt - 1) + Math.random() * 250, MAX_BACKOFF_MS);
+      const backoff =
+        serverDelay !== null
+          ? serverDelay
+          : Math.min(500 * 2 ** (attempt - 1) + Math.random() * 250, MAX_BACKOFF_MS);
 
-      // Publish the provider's own backoff so sibling processes pause too,
-      // rather than each one discovering the same 429 for itself.
+      // Publish the provider's backoff so sibling processes pause too, rather
+      // than each discovering the same limit for itself.
       if (isRateLimit(message)) {
         await rateLimiter.recordBackoff(backoff, message.slice(0, 200));
       }
 
-      const reason = isRateLimit(message)
-        ? `rate limited (${MAX_RPM || 'unthrottled'} rpm configured)`
-        : message.slice(0, 140);
       console.warn(
-        `[llm] attempt ${attempt}/${MAX_ATTEMPTS} failed: ${reason}; retrying in ${Math.round(backoff / 1000)}s`
+        `[llm] attempt ${attempt}/${MAX_ATTEMPTS} failed: ` +
+        `${isRateLimit(message) ? `rate limited (${MAX_RPM || 'unthrottled'} rpm configured)` : message.slice(0, 140)}; ` +
+        `retrying in ${Math.round(backoff / 1000)}s`
       );
       await sleep(backoff);
     }
@@ -153,4 +242,4 @@ async function generateJson({ system, prompt, schema, model }) {
   throw lastError;
 }
 
-module.exports = { generateJson, MODEL };
+module.exports = { generateJson, MODEL, PROVIDER, MAX_RPM };

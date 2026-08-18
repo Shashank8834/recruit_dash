@@ -32,9 +32,13 @@ services:
     environment:
       - PORT=3001
       - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@recruitment-db:5432/${POSTGRES_DB:-recruitment}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - LLM_MAX_RPM=${LLM_MAX_RPM:-4}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
-      - GEMINI_MAX_RPM=${GEMINI_MAX_RPM:-4}
       - EVOLUTION_WEBHOOK_TOKEN=${EVOLUTION_WEBHOOK_TOKEN}
       - INGEST_ALLOWED_CHATS=${INGEST_ALLOWED_CHATS}
       - WEBHOOK_FORWARD_URL=${WEBHOOK_FORWARD_URL}
@@ -71,9 +75,13 @@ services:
     command: ["node", "src/worker.js"]
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-recruitment}:${POSTGRES_PASSWORD:-recruitment}@recruitment-db:5432/${POSTGRES_DB:-recruitment}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - LLM_MAX_RPM=${LLM_MAX_RPM:-4}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
-      - GEMINI_MAX_RPM=${GEMINI_MAX_RPM:-4}
       - BATCH_QUIET_SECONDS=${BATCH_QUIET_SECONDS:-60}
       - BATCH_MAX_WINDOW_SECONDS=${BATCH_MAX_WINDOW_SECONDS:-600}
       - CONFIDENCE_FLOOR=${CONFIDENCE_FLOOR:-0.6}

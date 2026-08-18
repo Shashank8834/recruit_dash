@@ -205,10 +205,9 @@ function groupIntoBatches(messages) {
  * What this run will cost, before it starts.
  *
  * Both ceilings are reported because either can be the binding one, and on a
- * free tier it is almost always tokens: a submission costs two calls but
- * roughly eight thousand tokens, so a 6000 TPM budget paces the run far harder
- * than a 25 rpm one does. Quoting only requests per minute understated the
- * wall time by an order of magnitude, which is a bad surprise to hand someone
+ * free tier it is usually tokens: a 6000 TPM budget paces this run harder than
+ * a 25 rpm one does. Quoting only requests per minute understated the wall
+ * time by an order of magnitude, which is a bad surprise to hand someone
  * spending a quota that expires.
  */
 function printEstimate(submissions) {
@@ -217,8 +216,25 @@ function printEstimate(submissions) {
   // defaults per provider, and a second copy of that rule would drift.
   const { MAX_RPM: rpm, MAX_TPM: tpm } = llm;
   const calls = submissions * 2;
-  // Router plus matcher, at their default budgets. See classifier.js.
-  const tokens = submissions * 8400;
+  // Per-submission cost, measured rather than derived from the character
+  // budgets. Those budgets are ceilings: they describe the largest prompt the
+  // classifier is allowed to send, not the one it typically sends. Estimating
+  // from them assumed every routing call carried a full 3,000-character block
+  // and every match all five roles at full length, which came out around 8,400
+  // tokens a submission against a measured average nearer 3,300 — quoting 41
+  // minutes for work that takes closer to 16.
+  //
+  // Also an overestimate is not the safe direction here. This number only sets
+  // expectations; the rate limiter does the actual pacing from real usage. A
+  // wildly pessimistic quote just makes people cancel a run that would have
+  // finished.
+  //
+  // Re-measure after a prompt change:
+  //   SELECT round(avg(tokens)) FROM llm_call_log WHERE tokens > 0;
+  // noting the table is pruned to the last 60 seconds, so sample it during a
+  // run rather than after one.
+  const TOKENS_PER_CALL = parseInt(process.env.BACKFILL_TOKENS_PER_CALL || '1700', 10);
+  const tokens = calls * TOKENS_PER_CALL;
 
   const byRequests = rpm > 0 ? calls / rpm : 0;
   const byTokens = tpm > 0 ? tokens / tpm : 0;

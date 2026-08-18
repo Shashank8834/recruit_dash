@@ -11,6 +11,7 @@ const applicantsRoutes = require('./routes/applicants');
 const webhookRoutes = require('./routes/webhook');
 const reviewRoutes = require('./routes/review');
 const sheetMirror = require('./services/sheetMirror');
+const rateLimiter = require('./services/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -28,7 +29,20 @@ app.use('/webhook', webhookRoutes);
 app.get('/api/health', async (_req, res) => {
   try {
     await query('SELECT 1');
-    res.json({ status: 'ok', db: 'up', sheetMirror: sheetMirror.isEnabled() });
+    // The model budget is shared across processes, so exposing it here is the
+    // quickest way to see why classification has gone quiet.
+    const llm = await rateLimiter.status().catch(() => null);
+    res.json({
+      status: 'ok',
+      db: 'up',
+      sheetMirror: sheetMirror.isEnabled(),
+      llm: llm && {
+        usedLastMinute: llm.used_last_minute,
+        maxRpm: parseFloat(process.env.GEMINI_MAX_RPM || '4'),
+        blockedUntil: llm.blocked_until,
+        blockedReason: llm.blocked_until ? llm.reason : null,
+      },
+    });
   } catch (err) {
     res.status(503).json({ status: 'degraded', db: 'down', error: err.message });
   }

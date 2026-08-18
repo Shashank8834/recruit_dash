@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
+const rateLimiter = require('./rateLimiter');
 
 /**
  * The only file that talks to a model provider. Everything upstream deals in
@@ -20,36 +21,19 @@ const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
  * other rather than all discovering the limit at once. Set GEMINI_MAX_RPM to
  * 0 to disable once you are on a paid tier.
  *
- * Two caveats worth knowing:
+ * The budget is shared across processes via Postgres (see rateLimiter.js).
+ * It has to be: the API server, the worker and each one-shot script are
+ * separate processes on one API key, and an in-process counter resets to zero
+ * on every invocation — so a script re-run seconds later would fire straight
+ * into a window the previous run had already spent.
  *
- * 1. This budget is PER PROCESS. The API worker, the batch worker and the eval
- *    script are separate processes sharing one API key, so their budgets add
- *    up. Running the eval while the worker is live doubles the request rate and
- *    earns 429s from both. Stop the worker first, or split the budget between
- *    them.
- *
- * 2. The default sits just under the documented limit rather than exactly on
- *    it. Pacing at precisely 5/min leaves no room for the provider's window
- *    boundaries, and a retry consumes a slot of its own.
+ * The default sits just under the documented limit, because the provider's
+ * window boundaries need slack and every retry consumes a slot of its own.
  */
 const MAX_RPM = parseFloat(process.env.GEMINI_MAX_RPM || '4');
-const MIN_INTERVAL_MS = MAX_RPM > 0 ? Math.ceil(60000 / MAX_RPM) : 0;
 
-if (process.env.LLM_LOG_PACING === '1' && MIN_INTERVAL_MS) {
-  console.log(`[llm] pacing ${MAX_RPM} req/min (one every ${(MIN_INTERVAL_MS / 1000).toFixed(1)}s) — this budget is per process`);
-}
 const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
 const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '4096', 10);
-
-let nextSlotAt = 0;
-
-async function reserveSlot() {
-  if (!MIN_INTERVAL_MS) return;
-  const now = Date.now();
-  const slot = Math.max(now, nextSlotAt);
-  nextSlotAt = slot + MIN_INTERVAL_MS;
-  if (slot > now) await sleep(slot - now);
-}
 
 /**
  * Gemini returns the exact wait it wants in the error body. Honour it —
@@ -100,7 +84,7 @@ async function generateJson({ system, prompt, schema, model }) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      await reserveSlot();
+      await rateLimiter.acquire(MAX_RPM);
       const response = await ai.models.generateContent({
         model: modelId,
         contents: prompt,
@@ -150,6 +134,12 @@ async function generateJson({ system, prompt, schema, model }) {
       const backoff = serverDelay !== null
         ? serverDelay
         : Math.min(500 * 2 ** (attempt - 1) + Math.random() * 250, MAX_BACKOFF_MS);
+
+      // Publish the provider's own backoff so sibling processes pause too,
+      // rather than each one discovering the same 429 for itself.
+      if (isRateLimit(message)) {
+        await rateLimiter.recordBackoff(backoff, message.slice(0, 200));
+      }
 
       const reason = isRateLimit(message)
         ? `rate limited (${MAX_RPM || 'unthrottled'} rpm configured)`

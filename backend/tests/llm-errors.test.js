@@ -51,3 +51,25 @@ test('the server-stated wait is honoured in both phrasings', () => {
 
   assert.equal(llm.serverRetryDelayMs('no delay stated'), null);
 });
+
+// Groq validates JSON server-side, so a reply that ran out of tokens mid-object
+// comes back as a 400, not as a truncated body. It killed submissions outright
+// because 400 is not retryable.
+const GROQ_JSON_VALIDATE_FAILED =
+  '{"error":{"message":"Failed to generate JSON. Please adjust your prompt. See ' +
+  '\'failed_generation\' for more details.","type":"invalid_request_error",' +
+  '"code":"json_validate_failed","failed_generation":"max completion tokens ' +
+  'reached before generating a valid document"}}';
+
+test('a server-side JSON validation failure is not read as oversized', () => {
+  // It is a truncation: the prompt was fine, the output cap was not. Shrinking
+  // the prompt would discard the candidate's CV to fix an output problem.
+  assert.equal(llm.isOversizedRequest(400, GROQ_JSON_VALIDATE_FAILED), false);
+});
+
+test('reasoning effort is sent only to models that accept it', () => {
+  // Providers reject unknown parameters, so this cannot be set unconditionally.
+  assert.deepEqual(llm.reasoningEffortFor('openai/gpt-oss-120b'), { reasoning_effort: 'low' });
+  assert.deepEqual(llm.reasoningEffortFor('llama-3.1-8b-instant'), {});
+  assert.deepEqual(llm.reasoningEffortFor('gemini-3.5-flash'), {});
+});

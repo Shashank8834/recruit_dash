@@ -215,6 +215,32 @@ function describeSchema(schema) {
   );
 }
 
+/**
+ * Reasoning models spend completion tokens thinking before they answer, and
+ * that thinking is charged against the same `max_tokens` as the answer.
+ *
+ * gpt-oss-120b at Groq's default effort routinely burned several hundred
+ * tokens before emitting a character of JSON, so a 512-token routing call ran
+ * out mid-object and came back as `json_validate_failed` — "max completion
+ * tokens reached before generating a valid document". Raising the cap would
+ * only pay for the thinking twice, since reserved output counts against
+ * tokens-per-minute in full.
+ *
+ * Neither of our stages benefits from extended reasoning. Routing decides what
+ * a message is; matching quotes spans from a text sitting in the prompt. Both
+ * are extraction, not deduction, so the budget is better spent on the answer.
+ *
+ * Sent only to models known to accept it — providers reject unknown parameters
+ * outright, so this cannot be set unconditionally.
+ */
+function reasoningEffortFor(model) {
+  const effort = process.env.LLM_REASONING_EFFORT || 'low';
+  if (effort === 'none') return {};
+  return /gpt-oss|deepseek-r1|qwen3|magistral/i.test(model || '')
+    ? { reasoning_effort: effort }
+    : {};
+}
+
 async function callOpenAICompatible({ system, prompt, schema, model, attempt, maxOutputTokens }) {
   const base = (process.env.LLM_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/+$/, '');
   const apiKey = process.env.LLM_API_KEY;
@@ -242,12 +268,23 @@ async function callOpenAICompatible({ system, prompt, schema, model, attempt, ma
         response_format: { type: 'json_object' },
         temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
         max_tokens: maxOutputTokens,
+        ...reasoningEffortFor(model),
       }),
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       const retryAfter = response.headers.get('retry-after');
+      // Groq validates JSON server-side, so a reply that ran out of tokens
+      // mid-object arrives as a 400 `json_validate_failed` rather than as a
+      // truncated body with finishReason=length. Same failure, different
+      // envelope — and the 400 skipped the retry path entirely, killing the
+      // whole submission on what is a transient, recoverable outcome. Tag it
+      // as the truncation it is so the existing retry (with a raised cap)
+      // handles it.
+      if (/json_validate_failed|max completion tokens reached/i.test(body)) {
+        throw new Error(`TRUNCATED_JSON (${response.status}): ${body.slice(0, 240)}`);
+      }
       if (isOversizedRequest(response.status, body)) {
         // Distinct from a rate limit: waiting cannot help, because a single
         // request exceeds the ceiling. The caller has to send less.
@@ -312,7 +349,11 @@ function assertShape(data, schema) {
  */
 async function generateJson({ system, prompt, schema, model, maxOutputTokens }) {
   const modelId = model || MODEL;
-  const outputCap = maxOutputTokens || MAX_OUTPUT_TOKENS;
+  // Grows on a truncated reply. Retrying at the cap that just proved too small
+  // reproduces the truncation exactly, burning the retry budget and the tokens
+  // with it. Starts at the call site's own estimate so the common case stays
+  // cheap, since reserved output is charged against TPM whether used or not.
+  let outputCap = maxOutputTokens || MAX_OUTPUT_TOKENS;
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -362,6 +403,20 @@ async function generateJson({ system, prompt, schema, model, maxOutputTokens }) 
       if (isTokenLimit(message)) break;
       if (!RETRYABLE.test(message) || attempt === MAX_ATTEMPTS) break;
 
+      // A truncated reply is the one failure the next attempt can be set up to
+      // avoid: the cap was too small, so raise it rather than re-running the
+      // identical request. Bounded, because output is reserved against TPM in
+      // full and an unbounded cap would starve the prompt of room.
+      if (/TRUNCATED_JSON/.test(message)) {
+        const raised = Math.min(outputCap * 2, MAX_OUTPUT_TOKENS);
+        if (raised > outputCap) {
+          console.warn(
+            `[llm] reply truncated at ${outputCap} output tokens; retrying at ${raised}`
+          );
+          outputCap = raised;
+        }
+      }
+
       const serverDelay = serverRetryDelayMs(message);
       const backoff =
         serverDelay !== null
@@ -392,6 +447,7 @@ module.exports = {
   // failed silently in production before they were pinned.
   isOversizedRequest,
   serverRetryDelayMs,
+  reasoningEffortFor,
   MODEL,
   PROVIDER,
   MAX_RPM,

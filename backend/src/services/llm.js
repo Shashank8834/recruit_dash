@@ -19,9 +19,25 @@ const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
  * Slots are reserved synchronously, so concurrent callers queue behind each
  * other rather than all discovering the limit at once. Set GEMINI_MAX_RPM to
  * 0 to disable once you are on a paid tier.
+ *
+ * Two caveats worth knowing:
+ *
+ * 1. This budget is PER PROCESS. The API worker, the batch worker and the eval
+ *    script are separate processes sharing one API key, so their budgets add
+ *    up. Running the eval while the worker is live doubles the request rate and
+ *    earns 429s from both. Stop the worker first, or split the budget between
+ *    them.
+ *
+ * 2. The default sits just under the documented limit rather than exactly on
+ *    it. Pacing at precisely 5/min leaves no room for the provider's window
+ *    boundaries, and a retry consumes a slot of its own.
  */
-const MAX_RPM = parseInt(process.env.GEMINI_MAX_RPM || '5', 10);
+const MAX_RPM = parseFloat(process.env.GEMINI_MAX_RPM || '4');
 const MIN_INTERVAL_MS = MAX_RPM > 0 ? Math.ceil(60000 / MAX_RPM) : 0;
+
+if (process.env.LLM_LOG_PACING === '1' && MIN_INTERVAL_MS) {
+  console.log(`[llm] pacing ${MAX_RPM} req/min (one every ${(MIN_INTERVAL_MS / 1000).toFixed(1)}s) — this budget is per process`);
+}
 const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
 const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '4096', 10);
 

@@ -10,7 +10,26 @@ const classifier = require('./classifier');
 const media = require('./media');
 
 const CONTEXT_MESSAGES = parseInt(process.env.CLASSIFIER_CONTEXT_MESSAGES || '12', 10);
-const OPEN_JD_LIMIT = parseInt(process.env.MATCH_JD_LIMIT || '25', 10);
+/**
+ * How many open roles the matcher scores a candidate against, newest first.
+ *
+ * The n8n workflow this replaces used a single role — its "Get Latest open JD"
+ * node — and that is why it fit comfortably inside a free tier while this
+ * pipeline did not: 25 rendered roles were roughly 4,400 of a classification's
+ * ~5,600 tokens, so at Groq's 8,000 tokens per minute the JD list alone capped
+ * throughput near two candidates a minute.
+ *
+ * Five rather than one, because the two failure modes are not symmetric. With
+ * one role, every candidate who answers last week's posting is scored against
+ * this week's and comes back NONE — a wrong verdict that looks like a real one.
+ * With five, a role the model never saw is still unmatchable, but the window
+ * covers the span people actually reply within, and NONE keeps meaning "none of
+ * these fit" rather than "the right one was not in the prompt". The cost is
+ * ~875 JD tokens instead of ~4,400, which is what buys back the throughput.
+ *
+ * Raise it if candidates reply to postings older than the last five.
+ */
+const OPEN_JD_LIMIT = parseInt(process.env.MATCH_JD_LIMIT || '5', 10);
 
 /**
  * Turns one closed batch into a submission and a verdict.

@@ -17,6 +17,7 @@ const path = require('path');
 const { pool, query } = require('../src/db');
 const { migrate } = require('../src/db/migrate');
 const classifier = require('../src/services/classifier');
+const llm = require('../src/services/llm');
 const jdsRepo = require('../src/repo/jds');
 
 const args = process.argv.slice(2);
@@ -152,10 +153,17 @@ async function run() {
 
   // Roughly 1.6 calls per case: every case is routed, and those expecting a
   // verdict are matched as well.
-  const rpm = parseFloat(process.env.GEMINI_MAX_RPM || '4');
+  // Tokens bind before requests on a free tier, so quote both. Roughly 1.6
+  // calls per case: every case is routed, and those expecting a verdict are
+  // matched as well.
+  const { MAX_RPM: rpm, MAX_TPM: tpm } = llm;
+  const byRequests = rpm > 0 ? (labels.length * 1.6) / rpm : 0;
+  const byTokens = tpm > 0 ? (labels.length * 6700) / tpm : 0;
+  const minutes = Math.ceil(Math.max(byRequests, byTokens));
   console.log(
-    rpm > 0
-      ? `Paced at ${rpm} req/min — expect about ${Math.ceil((labels.length * 1.6) / rpm)} minute(s).\n`
+    minutes
+      ? `Paced at ${rpm || 'unlimited'} rpm / ${tpm || 'unlimited'} tpm — ` +
+        `expect about ${minutes} minute(s).\n`
       : 'Rate limiting disabled.\n'
   );
 

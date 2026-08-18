@@ -123,6 +123,28 @@ npm run worker:dev   # batching + classification worker
 cd ../frontend && npm install && npm run dev   # :5173, proxies /api and /webhook
 ```
 
+### Re-running the classifier over existing data
+
+After a prompt change the verdicts already on disk are the stale ones, and
+nothing in the normal flow revisits them — `--classify` only ever picks up
+messages that never made it into a submission.
+
+```bash
+docker compose exec backend npm run backfill -- --reclassify --days=7 --limit=20
+```
+
+Selection is by `prompt_version`, so the run is **resumable**: each submission
+that succeeds moves to the current version and drops out of the next run's
+query. Repeat with `--limit` until the backlog clears — which is the shape you
+want on a metered tier, where a week of history is measured in hours, not
+minutes. Every run prints its cost against both ceilings before it starts.
+
+Verdicts are append-only, so this is non-destructive: the previous verdict is
+demoted rather than deleted, and a human override is carried forward onto the
+new row so a re-run cannot quietly hand the decision back to the model. Job
+postings are skipped, because re-running one would insert a duplicate role
+rather than update the original.
+
 ## Measuring classification accuracy
 
 This is the part that makes prompt changes tractable rather than guesswork.
@@ -148,6 +170,8 @@ drawn from your actual traffic is worth far more than any prompt tweak made blin
 | `MATCH_JD_LIMIT` | 25 | You routinely have more than 25 roles open at once |
 | `MEDIA_MAX_MB` | 15 | Candidates send resumes larger than 15MB |
 | `MEDIA_MAX_CHARS` | 20000 | Long CVs are being truncated before the classifier sees the end |
+| `LLM_MAX_TPM` | 6000 on Groq, off on Gemini | You are off the free tier. On Groq this is the ceiling that actually binds |
+| `ROUTER_TEXT_CHARS` | 3000 | Stage 1 is miscategorising messages whose nature only becomes clear late |
 
 The dashboard's **Pipeline** panel (chats mid-batch / unclassified / failed / sheet
 backlog) is the fastest way to spot a stuck worker or a failing sheet sync.
@@ -170,11 +194,28 @@ LLM_MAX_RPM=25
 The second covers Groq, OpenRouter, Cerebras, Together and a local Ollama,
 since they share a wire format.
 
-**Requests per minute is the limit that bites here**, not tokens. This workload
-makes many small calls, so a free tier that is generous on tokens and stingy on
-requests is the wrong shape. Gemini's free tier allows 5 rpm *per Google Cloud
-project* — minting another key does not help, because the quota is not per key.
-Groq's free tier is roughly 30 rpm.
+**Which limit bites depends on the provider, and the two free tiers fail in
+opposite directions.** On Groq it is tokens: a single classification costs a
+few thousand of them, so the 8000 TPM allowance is exhausted after about two
+calls a minute, long before a 30 rpm request budget is touched. On Gemini it is
+requests: 5 rpm *per Google Cloud project* against hundreds of thousands of
+tokens a minute — and minting another key does not help, because the quota is
+not per key.
+
+Both ceilings are therefore enforced (`LLM_MAX_RPM`, `LLM_MAX_TPM`), both are
+shared across processes via Postgres — the API, the worker and each one-shot
+script draw on one key — and `LLM_MAX_TPM` defaults per provider so neither
+tier is throttled by a limit that was never going to bind.
+
+Two consequences worth internalising before you tune anything:
+
+- **A single request must fit inside `LLM_MAX_TPM` on its own.** One that does
+  not can never be sent, however long you wait, so the limiter rejects it
+  immediately with `TOKEN_LIMIT` and the classifier re-renders it smaller. If
+  you raise `MATCH_PROMPT_CHARS`, raise `LLM_MAX_TPM` to match.
+- **Reserved output counts.** Providers meter `max_tokens` in full whether or
+  not the model generates that much, which is why the two stages have separate
+  output budgets rather than one global cap.
 
 **Model ids are retired regularly.** Rather than trusting documentation:
 

@@ -5,7 +5,7 @@ const { generateJson } = require('./llm');
  * classification row, so you can tell which prompt produced which verdict and
  * diff two versions over the same submissions.
  */
-const PROMPT_VERSION = 'v3-two-stage';
+const PROMPT_VERSION = 'v4-budgeted';
 
 const NEEDS_REVIEW_BELOW = parseFloat(process.env.CONFIDENCE_FLOOR || '0.6');
 
@@ -23,10 +23,70 @@ const PROMPT_BUDGET_CHARS = parseInt(process.env.MATCH_PROMPT_CHARS || '12000', 
 const JD_TEXT_CHARS = parseInt(process.env.MATCH_JD_TEXT_CHARS || '450', 10);
 const CANDIDATE_CHARS = parseInt(process.env.MATCH_CANDIDATE_CHARS || '5000', 10);
 
+/**
+ * Stage 1's budget, deliberately much smaller than stage 2's.
+ *
+ * Routing only decides what a message IS, and that is settled by its opening
+ * lines — nobody writes a job posting that reads as chatter for three thousand
+ * characters and then reveals itself. Sending an entire 20,000-character CV to
+ * answer that question was the largest avoidable cost in the pipeline, and it
+ * made stage 1 the request most likely to be rejected outright — on a call
+ * that, unlike stage 2, had no way to recover.
+ */
+const ROUTER_TEXT_CHARS = parseInt(process.env.ROUTER_TEXT_CHARS || '3000', 10);
+const ROUTER_CONTEXT_CHARS = parseInt(process.env.ROUTER_CONTEXT_CHARS || '2000', 10);
+// One rambling earlier message must not consume the whole context block.
+const CONTEXT_MESSAGE_CHARS = parseInt(process.env.ROUTER_CONTEXT_MESSAGE_CHARS || '400', 10);
+
+/** How many times an over-ceiling prompt is halved before giving up. */
+const SHRINK_ATTEMPTS = 3;
+
+/**
+ * Output budget per stage. Providers reserve max_tokens against
+ * tokens-per-minute in full, so a cap sized for the matcher's evidence array
+ * would charge the router the same for a five-field answer it never uses.
+ */
+const ROUTER_OUTPUT_TOKENS = parseInt(process.env.ROUTER_OUTPUT_TOKENS || '512', 10);
+const MATCH_OUTPUT_TOKENS = parseInt(process.env.MATCH_OUTPUT_TOKENS || '1024', 10);
+
 function clip(text, max, label) {
   if (!text) return '';
   return text.length <= max ? text : `${text.slice(0, max)}
 […${label} truncated]`;
+}
+
+/**
+ * Sends a prompt that might exceed the provider's per-request token ceiling,
+ * halving it and retrying if it does.
+ *
+ * A TOKEN_LIMIT rejection is not a rate limit: the request is too big, so
+ * waiting changes nothing and resending it unchanged fails identically. The
+ * only move is to send less — and only the caller knows what is safe to drop,
+ * hence `build(scale)`, which re-renders the prompt at a fraction of its
+ * character budgets rather than blindly truncating the finished string.
+ *
+ * @param {function(number): string} build  Renders the prompt at a 0-1 scale.
+ */
+async function generateShrinking({ system, schema, build, label, maxOutputTokens }) {
+  let scale = 1;
+  let lastError;
+
+  for (let attempt = 1; attempt <= SHRINK_ATTEMPTS; attempt += 1) {
+    try {
+      return await generateJson({
+        system, prompt: build(scale), schema, maxOutputTokens,
+      });
+    } catch (err) {
+      lastError = err;
+      if (!/TOKEN_LIMIT/.test(err.message || '') || attempt === SHRINK_ATTEMPTS) throw err;
+      scale /= 2;
+      console.warn(
+        `[classifier] ${label} request over the token ceiling; ` +
+        `retrying at ${Math.round(scale * 100)}% of the character budget`
+      );
+    }
+  }
+  throw lastError;
 }
 
 /* ------------------------------------------------------------------ */
@@ -48,7 +108,7 @@ Categories:
   about process. Real messages, but not a posting and not an application.
 - unclear: genuinely ambiguous or too fragmentary to categorise.
 
-Two rules that matter more than the rest:
+Three rules that matter more than the rest:
 
 1. The text you receive may be several WhatsApp messages sent in a row and
    joined together, because people split one thought across messages. Judge the
@@ -100,30 +160,51 @@ const ROUTER_SCHEMA = {
   required: ['kind', 'confidence', 'continues_previous', 'reason'],
 };
 
-function renderContext(contextMessages) {
+/**
+ * Context exists only to answer "does this block continue an earlier one?", so
+ * it is trimmed from the FRONT when it overflows. The messages immediately
+ * before this block are the ones that decide a continuation; the oldest are
+ * the ones that can be spared.
+ */
+function renderContext(contextMessages, budgetChars) {
   if (!contextMessages || contextMessages.length === 0) {
     return '(no earlier messages in this chat)';
   }
-  return contextMessages
-    .map((m) => {
-      const when = new Date(m.sent_at).toISOString();
-      const text = m.body || (m.media_type ? `[${m.media_type}]` : '');
-      return `[${when}] ${text}`;
-    })
-    .join('\n');
+
+  const lines = contextMessages.map((m) => {
+    const when = new Date(m.sent_at).toISOString();
+    const text = m.body || (m.media_type ? `[${m.media_type}]` : '');
+    return `[${when}] ${clip(text, CONTEXT_MESSAGE_CHARS, 'message')}`;
+  });
+
+  const kept = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    // Always keep the most recent line even if it alone blows the budget: an
+    // empty context block would silently disable continuation detection.
+    if (used + lines[i].length > budgetChars && kept.length) break;
+    kept.unshift(lines[i]);
+    used += lines[i].length + 1;
+  }
+
+  const dropped = lines.length - kept.length;
+  const omitted = dropped ? `[…${dropped} earlier message(s) omitted]\n` : '';
+  return omitted + kept.join('\n');
 }
 
 async function route({ text, contextMessages }) {
-  const prompt = `# Earlier messages in this chat (context only)
-${renderContext(contextMessages)}
+  const build = (scale) => `# Earlier messages in this chat (context only)
+${renderContext(contextMessages, Math.floor(ROUTER_CONTEXT_CHARS * scale))}
 
 # Message block to categorise
-${text}`;
+${clip(text, Math.floor(ROUTER_TEXT_CHARS * scale), 'message')}`;
 
-  const { data, model, usage } = await generateJson({
+  const { data, model, usage } = await generateShrinking({
     system: ROUTER_SYSTEM,
-    prompt,
     schema: ROUTER_SCHEMA,
+    build,
+    label: 'routing',
+    maxOutputTokens: ROUTER_OUTPUT_TOKENS,
   });
 
   return {
@@ -262,52 +343,39 @@ async function match({ text, jds }) {
     };
   }
 
-  // Shrink and retry on a token-limit rejection. Retrying unchanged would fail
-  // identically, since the request itself is over the ceiling.
-  let budget = PROMPT_BUDGET_CHARS;
-  let jdTextChars = JD_TEXT_CHARS;
-  let candidateChars = CANDIDATE_CHARS;
-  let lastError;
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const rendered = renderJds(jds, budget, jdTextChars);
+  // Stage 2 is the expensive call: every open role plus the candidate's whole
+  // CV. Rendering is a function of scale so a rejection can re-render smaller
+  // rather than truncate a prompt that is already assembled.
+  const build = (scale) => {
+    const rendered = renderJds(
+      jds,
+      Math.floor(PROMPT_BUDGET_CHARS * scale),
+      Math.floor(JD_TEXT_CHARS * scale)
+    );
     if (rendered.dropped > 0) {
       console.warn(
         `[classifier] prompt budget dropped ${rendered.dropped} role(s); ` +
         'raise MATCH_PROMPT_CHARS or lower MATCH_JD_LIMIT so every open role is considered'
       );
     }
-
-    const prompt = `# Open roles
+    return `# Open roles
 ${rendered.text}
 
 # Candidate message
-${clip(text, candidateChars, 'CV')}`;
+${clip(text, Math.floor(CANDIDATE_CHARS * scale), 'CV')}`;
+  };
 
-    try {
-      const { data, model, usage } = await generateJson({
-        system: MATCHER_SYSTEM,
-        prompt,
-        schema: MATCHER_SCHEMA,
-      });
-      return buildMatchResult(data, model, usage);
-    } catch (err) {
-      lastError = err;
-      if (!/TOKEN_LIMIT/.test(err.message || '') || attempt === 3) throw err;
-      budget = Math.floor(budget / 2);
-      jdTextChars = Math.floor(jdTextChars / 2);
-      candidateChars = Math.floor(candidateChars / 2);
-      console.warn(
-        `[classifier] request over the token ceiling; retrying with a ` +
-        `${budget}-char role budget and a ${candidateChars}-char candidate excerpt`
-      );
-    }
-  }
-  throw lastError;
+  const { data, model, usage } = await generateShrinking({
+    system: MATCHER_SYSTEM,
+    schema: MATCHER_SCHEMA,
+    build,
+    label: 'matching',
+    maxOutputTokens: MATCH_OUTPUT_TOKENS,
+  });
+  return buildMatchResult(data, model, usage);
 }
 
 function buildMatchResult(data, model, usage) {
-
   const jdExternalId =
     data.jd_external_id && data.jd_external_id !== 'NONE' ? data.jd_external_id : null;
 

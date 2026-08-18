@@ -36,6 +36,50 @@ const REQUEST_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10);
 // files keep working after a provider switch.
 const MAX_RPM = parseFloat(process.env.LLM_MAX_RPM || process.env.GEMINI_MAX_RPM || '4');
 
+// Tokens per minute, defaulted per provider because the two free tiers fail in
+// opposite directions.
+//
+// Groq allows roughly 8000 TPM against 30 rpm: one classification costs a few
+// thousand tokens, so the token budget is spent after about two calls, and
+// pacing on requests alone sends a burst that is rejected on arrival. The
+// default sits under 8000 to leave room at window boundaries, since the
+// reservation is made on an estimate.
+//
+// Gemini is the reverse — hundreds of thousands of tokens a minute against 5
+// rpm per project — so a token ceiling there would throttle a limit that was
+// never going to bind, and requests-per-minute is left to do the work.
+//
+// Set explicitly to override either way; 0 disables, as with MAX_RPM.
+const MAX_TPM = parseFloat(
+  process.env.LLM_MAX_TPM || (PROVIDER === 'gemini' ? '0' : '6000')
+);
+
+/**
+ * What this request will cost against the token budget, before sending it.
+ *
+ * Two deliberate biases, both upward. Four characters per token is the usual
+ * English approximation and JSON-heavy prompts run slightly denser than that;
+ * and the RESERVED output budget is counted in full, because providers meter
+ * max_tokens against TPM whether or not the model generates that much. An
+ * estimate that is a little high costs a few seconds of idling. One that is
+ * low costs a 429, and 429s are what this whole file exists to avoid.
+ */
+function estimateTokens(system, prompt, maxOutputTokens = MAX_OUTPUT_TOKENS) {
+  const chars = (system || '').length + (prompt || '').length;
+  return Math.ceil(chars / 4) + maxOutputTokens;
+}
+
+/** Tokens the provider says it actually charged, across both wire formats. */
+function actualTokens(usage) {
+  if (!usage) return null;
+  return (
+    usage.total_tokens ||
+    usage.totalTokenCount ||
+    (usage.prompt_tokens || 0) + (usage.completion_tokens || 0) ||
+    null
+  );
+}
+
 // Falling back to a Gemini model id while pointed at an OpenAI-compatible
 // endpoint yields a confusing 404 about a model that was never going to exist
 // there, so each provider gets its own default.
@@ -64,7 +108,23 @@ function serverRetryDelayMs(message) {
   return Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, MAX_BACKOFF_MS);
 }
 
+/**
+ * A single request that exceeds the ceiling, as opposed to too many requests.
+ *
+ * The distinction matters because the two look identical on the wire — Groq
+ * returns 429 for both — but the remedies are opposites. A rate limit clears
+ * by waiting. An oversized request does not: the same request re-sent a minute
+ * later is still oversized, so retrying it burns quota to reproduce the same
+ * failure, and pausing every sibling process on its behalf stalls work that
+ * would have succeeded. Only sending less helps, and only the caller can do
+ * that — so this fails fast up to classifier.match, which shrinks and retries.
+ */
+function isTokenLimit(message) {
+  return /TOKEN_LIMIT/.test(message || '');
+}
+
 function isRateLimit(message) {
+  if (isTokenLimit(message)) return false;
   return /\b429\b|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(message || '');
 }
 
@@ -83,7 +143,7 @@ function getGemini() {
   return geminiClient;
 }
 
-async function callGemini({ system, prompt, schema, model, attempt }) {
+async function callGemini({ system, prompt, schema, model, attempt, maxOutputTokens }) {
   const response = await getGemini().models.generateContent({
     model,
     contents: prompt,
@@ -95,7 +155,7 @@ async function callGemini({ system, prompt, schema, model, attempt }) {
       // cap and truncates the JSON; an identical retry reproduces it exactly,
       // so each retry nudges just enough to break the loop.
       temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
     },
   });
 
@@ -116,7 +176,7 @@ function describeSchema(schema) {
   );
 }
 
-async function callOpenAICompatible({ system, prompt, schema, model, attempt }) {
+async function callOpenAICompatible({ system, prompt, schema, model, attempt, maxOutputTokens }) {
   const base = (process.env.LLM_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/+$/, '');
   const apiKey = process.env.LLM_API_KEY;
   if (!apiKey) throw new Error('LLM_API_KEY is not set');
@@ -142,7 +202,7 @@ async function callOpenAICompatible({ system, prompt, schema, model, attempt }) 
         ],
         response_format: { type: 'json_object' },
         temperature: attempt === 1 ? 0 : Math.min(0.1 * (attempt - 1), 0.3),
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: maxOutputTokens,
       }),
     });
 
@@ -201,20 +261,38 @@ function assertShape(data, schema) {
 
 /**
  * Calls the configured provider and returns parsed JSON.
+ *
+ * `maxOutputTokens` is worth setting per call site rather than globally.
+ * Providers reserve it against tokens-per-minute in full, whether or not the
+ * model generates that much, so a one-size cap sized for the largest schema
+ * charges every small call the same. The router answers in a handful of
+ * fields; the matcher returns an evidence array. Sizing each to its own
+ * schema is free throughput on a metered tier.
+ *
  * @returns {Promise<{data: object, model: string, usage: object}>}
  */
-async function generateJson({ system, prompt, schema, model }) {
+async function generateJson({ system, prompt, schema, model, maxOutputTokens }) {
   const modelId = model || MODEL;
+  const outputCap = maxOutputTokens || MAX_OUTPUT_TOKENS;
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      await rateLimiter.acquire(MAX_RPM);
+      const estimated = estimateTokens(system, prompt, outputCap);
+      const { logId } = await rateLimiter.acquire(MAX_RPM, {
+        maxTpm: MAX_TPM,
+        estimatedTokens: estimated,
+      });
 
       const call = PROVIDER === 'gemini' ? callGemini : callOpenAICompatible;
       const { text, finishReason, usage } = await call({
-        system, prompt, schema, model: modelId, attempt,
+        system, prompt, schema, model: modelId, attempt, maxOutputTokens: outputCap,
       });
+
+      // Correct the reservation now that the provider has told us the real
+      // cost. Done before the response is parsed, so a malformed reply still
+      // charges the window for the tokens it genuinely consumed.
+      await rateLimiter.recordActual(logId, actualTokens(usage));
 
       if (!text) throw new Error('empty response from model');
 
@@ -240,6 +318,9 @@ async function generateJson({ system, prompt, schema, model }) {
     } catch (err) {
       lastError = err;
       const message = err.message || '';
+      // Checked before RETRYABLE, which would otherwise match the 429 that
+      // Groq returns for an oversized request and retry it identically.
+      if (isTokenLimit(message)) break;
       if (!RETRYABLE.test(message) || attempt === MAX_ATTEMPTS) break;
 
       const serverDelay = serverRetryDelayMs(message);
@@ -265,4 +346,4 @@ async function generateJson({ system, prompt, schema, model }) {
   throw lastError;
 }
 
-module.exports = { generateJson, MODEL, PROVIDER, MAX_RPM };
+module.exports = { generateJson, estimateTokens, MODEL, PROVIDER, MAX_RPM, MAX_TPM };

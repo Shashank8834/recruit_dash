@@ -11,6 +11,23 @@ async function record(
 ) {
   const run = client ? client.query.bind(client) : query;
 
+  // Look for a human verdict on the row about to be demoted, BEFORE demoting
+  // it. Overrides are joined to reads by classification_id, so re-running the
+  // classifier would otherwise retire the reviewed row and take the human
+  // decision out of every read with it — the model winning simply by being
+  // re-run, which is the one outcome an override exists to prevent. The old
+  // row and its override stay in history; the verdict is carried forward.
+  const { rows: reviewed } = await run(
+    `SELECT h.verdict, h.reviewer, h.note
+       FROM human_overrides h
+       JOIN classifications c ON c.id = h.classification_id
+      WHERE c.submission_id = $1
+        AND COALESCE(c.jd_id, 0) = COALESCE($2::bigint, 0)
+        AND c.is_current
+      LIMIT 1`,
+    [submissionId, jdId || null]
+  );
+
   await run(
     `UPDATE classifications
         SET is_current = false
@@ -36,6 +53,16 @@ async function record(
       promptVersion,
     ]
   );
+
+  if (reviewed[0]) {
+    await run(
+      `INSERT INTO human_overrides (classification_id, verdict, reviewer, note)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (classification_id) DO NOTHING`,
+      [rows[0].id, reviewed[0].verdict, reviewed[0].reviewer, reviewed[0].note]
+    );
+  }
+
   return rows[0];
 }
 

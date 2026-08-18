@@ -20,9 +20,14 @@
  *
  * Usage:
  *   node scripts/backfill.js --inspect             # show Evolution's schema
- *   node scripts/backfill.js --days=14             # dry run, counts only
- *   node scripts/backfill.js --days=14 --import    # write messages
+ *   node scripts/backfill.js --days=7              # dry run, counts only
+ *   node scripts/backfill.js --days=7 --import     # write messages
  *   node scripts/backfill.js --classify --limit=20 # classify a slice
+ *   node scripts/backfill.js --reclassify --limit=20  # re-run current prompts
+ *
+ * --days defaults to 7. On a metered free tier the window is a spending
+ * decision as much as a scope one: every extra day is more submissions, and
+ * each submission costs two model calls that come out of the same quota.
  */
 require('dotenv').config();
 
@@ -33,7 +38,9 @@ const { normalize } = require('../src/services/evolution');
 const contactsRepo = require('../src/repo/contacts');
 const messagesRepo = require('../src/repo/messages');
 const submissionsRepo = require('../src/repo/submissions');
-const { classifySubmission } = require('../src/services/pipeline');
+const { classifySubmission, reclassify } = require('../src/services/pipeline');
+const classifier = require('../src/services/classifier');
+const llm = require('../src/services/llm');
 const media = require('../src/services/media');
 
 const args = process.argv.slice(2);
@@ -43,10 +50,11 @@ const flag = (name, fallback) => {
 };
 const has = (name) => args.includes(`--${name}`);
 
-const DAYS = parseInt(flag('days', '14'), 10);
+const DAYS = parseInt(flag('days', '7'), 10);
 const LIMIT = parseInt(flag('limit', '0'), 10);
 const DO_IMPORT = has('import');
 const DO_CLASSIFY = has('classify');
+const DO_RECLASSIFY = has('reclassify');
 const INSPECT = has('inspect');
 const QUIET_SECONDS = parseInt(process.env.BATCH_QUIET_SECONDS || '60', 10);
 const MAX_WINDOW_SECONDS = parseInt(process.env.BATCH_MAX_WINDOW_SECONDS || '600', 10);
@@ -193,6 +201,101 @@ function groupIntoBatches(messages) {
   return batches;
 }
 
+/**
+ * What this run will cost, before it starts.
+ *
+ * Both ceilings are reported because either can be the binding one, and on a
+ * free tier it is almost always tokens: a submission costs two calls but
+ * roughly eight thousand tokens, so a 6000 TPM budget paces the run far harder
+ * than a 25 rpm one does. Quoting only requests per minute understated the
+ * wall time by an order of magnitude, which is a bad surprise to hand someone
+ * spending a quota that expires.
+ */
+function printEstimate(submissions) {
+  if (submissions === 0) return;
+  // Read the resolved ceilings rather than re-deriving them: LLM_MAX_TPM
+  // defaults per provider, and a second copy of that rule would drift.
+  const { MAX_RPM: rpm, MAX_TPM: tpm } = llm;
+  const calls = submissions * 2;
+  // Router plus matcher, at their default budgets. See classifier.js.
+  const tokens = submissions * 8400;
+
+  const byRequests = rpm > 0 ? calls / rpm : 0;
+  const byTokens = tpm > 0 ? tokens / tpm : 0;
+  const minutes = Math.ceil(Math.max(byRequests, byTokens));
+
+  if (!minutes) {
+    console.log(`About ${calls} model call(s); rate limiting is disabled.`);
+    return;
+  }
+  const bound = byTokens >= byRequests ? 'tokens' : 'requests';
+  console.log(
+    `About ${calls} model call(s) and ${tokens.toLocaleString()} tokens: ` +
+    `roughly ${minutes} minute(s), bound by ${bound} ` +
+    `(${rpm || 'unlimited'} rpm, ${tpm || 'unlimited'} tpm). ` +
+    'Use --limit=N to take a slice.'
+  );
+}
+
+/**
+ * Re-runs the current prompts over submissions that were already classified by
+ * an older one.
+ *
+ * Separate from --classify, which only ever sees messages that never made it
+ * into a submission. After a prompt or budgeting change the verdicts already
+ * on disk are the stale ones, and nothing else revisits them.
+ *
+ * Selection is by prompt_version, which makes the run RESUMABLE: each
+ * submission that succeeds moves to the current version and drops out of the
+ * next run's query. On a metered tier that matters — this is a job you expect
+ * to stop and restart with --limit until the backlog clears.
+ *
+ * Job postings are deliberately excluded. They have no classification row to
+ * compare versions against, and re-running one calls jdsRepo.create again,
+ * which would insert a duplicate role rather than update the original.
+ */
+async function reclassifyPhase() {
+  const since = Math.floor(Date.now() / 1000) - DAYS * 86400;
+  const { rows: stale } = await query(
+    `SELECT DISTINCT s.id, s.created_at, s.status
+       FROM submissions s
+       LEFT JOIN classifications c ON c.submission_id = s.id AND c.is_current
+      WHERE s.created_at >= to_timestamp($1)
+        AND (
+          s.status = 'failed'
+          OR (c.id IS NOT NULL AND c.prompt_version IS DISTINCT FROM $2)
+        )
+      ORDER BY s.created_at DESC`,
+    [since, classifier.PROMPT_VERSION]
+  );
+
+  console.log(
+    `${stale.length} submission(s) in the last ${DAYS} day(s) are not on ` +
+    `prompt ${classifier.PROMPT_VERSION} (or previously failed).`
+  );
+  printEstimate(stale.length);
+
+  let todo = stale;
+  if (LIMIT > 0) {
+    todo = todo.slice(0, LIMIT);
+    console.log(`Processing the first ${todo.length}.`);
+  }
+
+  let ok = 0;
+  let failed = 0;
+  for (const [i, row] of todo.entries()) {
+    try {
+      const result = await reclassify(row.id);
+      ok += 1;
+      console.log(`[${i + 1}/${todo.length}] submission ${row.id} -> ${JSON.stringify(result)}`);
+    } catch (err) {
+      failed += 1;
+      console.error(`[${i + 1}/${todo.length}] submission ${row.id} failed: ${err.message}`);
+    }
+  }
+  console.log(`\nRe-classified ${ok}, failed ${failed}. Re-run to continue.`);
+}
+
 async function classifyPhase() {
   const since = Math.floor(Date.now() / 1000) - DAYS * 86400;
   const { rows: pending } = await query(
@@ -216,13 +319,7 @@ async function classifyPhase() {
 
   console.log(`${pending.length} unclassified message(s) form ${batches.length} submission(s).`);
 
-  const rpm = parseFloat(process.env.GEMINI_MAX_RPM || '4');
-  if (rpm > 0) {
-    console.log(
-      `At ${rpm} req/min (~2 calls each) the full set is roughly ` +
-      `${Math.ceil((batches.length * 2) / rpm)} minute(s).`
-    );
-  }
+  printEstimate(batches.length);
 
   if (!DO_CLASSIFY) {
     console.log('\nDRY RUN — re-run with --classify to process. Use --limit=N for a slice.');
@@ -264,8 +361,14 @@ async function classifyPhase() {
 
 (async () => {
   await migrate();
-  if (INSPECT || !DO_CLASSIFY) await importPhase();
-  if (DO_CLASSIFY || (!DO_IMPORT && !INSPECT)) await classifyPhase();
+  // --reclassify works entirely on rows we already hold, so it neither reads
+  // Evolution nor needs EVOLUTION_DB_URL to be set.
+  if (DO_RECLASSIFY) {
+    await reclassifyPhase();
+  } else {
+    if (INSPECT || !DO_CLASSIFY) await importPhase();
+    if (DO_CLASSIFY || (!DO_IMPORT && !INSPECT)) await classifyPhase();
+  }
   await pool.end();
 })().catch((err) => {
   console.error(err.message);

@@ -4,15 +4,9 @@ const jdsRepo = require('../repo/jds');
 const applicantsRepo = require('../repo/applicants');
 const sheetMirror = require('../services/sheetMirror');
 const serialize = require('../serializers');
+const { dateRange } = require('../dateRange');
 
-function dateRange(req) {
-  const now = Math.floor(Date.now() / 1000);
-  const start = req.query.startDate
-    ? parseInt(req.query.startDate, 10)
-    : now - 30 * 24 * 60 * 60;
-  const end = req.query.endDate ? parseInt(req.query.endDate, 10) : now;
-  return { start, end };
-}
+
 
 router.get('/', async (req, res) => {
   try {

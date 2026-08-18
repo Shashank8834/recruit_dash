@@ -42,7 +42,12 @@ async function listBetween({ start, end, status }) {
        LEFT JOIN classifications c ON c.jd_id = j.id AND c.is_current
       WHERE j.posted_at >= to_timestamp($1)
         AND j.posted_at <= to_timestamp($2)
+        -- Drafts are hidden unless asked for by name. They are message
+        -- fragments with no title and no requirements, kept because the other
+        -- half may still arrive — but listing hundreds of them alongside real
+        -- openings buries the roles someone actually wants to see.
         AND ($3::text IS NULL OR j.status = $3)
+        AND ($3::text IS NOT NULL OR j.status <> 'draft')
       GROUP BY j.id
       ORDER BY j.posted_at DESC`,
     [start, end, status || null]

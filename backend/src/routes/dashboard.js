@@ -2,20 +2,21 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 const applicantsRepo = require('../repo/applicants');
+const { dateRange } = require('../dateRange');
 
 router.get('/', async (req, res) => {
   try {
-    const now = Math.floor(Date.now() / 1000);
-    const start = req.query.startDate
-      ? parseInt(req.query.startDate, 10)
-      : now - 30 * 24 * 60 * 60;
-    const end = req.query.endDate ? parseInt(req.query.endDate, 10) : now;
+    const { start, end } = dateRange(req);
 
     const [counts, jdCount, pipeline] = await Promise.all([
       applicantsRepo.counts({ start, end }),
       query(
+        // Drafts are fragments awaiting their other half, not open roles. They
+        // are excluded from matching, so counting them here would advertise
+        // openings the pipeline will never match anyone to.
         `SELECT COUNT(*)::int AS count FROM jds
-          WHERE posted_at >= to_timestamp($1) AND posted_at <= to_timestamp($2)`,
+          WHERE posted_at >= to_timestamp($1) AND posted_at <= to_timestamp($2)
+            AND status <> 'draft'`,
         [start, end]
       ),
       query(

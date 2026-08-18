@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DateRangeFilter from '../components/DateRangeFilter';
-import { formatDate, toDateInput, toUnix, nowMinus } from '../lib/utils';
+import { formatDate, toDateInput, toUnix, nowMinus, DEFAULT_RANGE_DAYS } from '../lib/utils';
 
 function StatusTag({ status }) {
   return (
@@ -22,7 +22,7 @@ export default function JDList() {
   const [jds, setJds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [startDate, setStartDate] = useState(toDateInput(nowMinus(30)));
+  const [startDate, setStartDate] = useState(toDateInput(nowMinus(DEFAULT_RANGE_DAYS)));
   const [endDate, setEndDate] = useState(toDateInput(Math.floor(Date.now() / 1000)));
   const [statusFilter, setStatusFilter] = useState('');
   const navigate = useNavigate();

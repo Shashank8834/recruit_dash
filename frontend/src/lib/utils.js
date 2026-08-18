@@ -34,3 +34,15 @@ export function toUnix(dateStr, endOfDay = false) {
 export function nowMinus(days) {
   return Math.floor(Date.now() / 1000) - days * 24 * 60 * 60;
 }
+
+/**
+ * Days of history the lists open on.
+ *
+ * Every page sends an explicit startDate, so the server's default window is
+ * never consulted — changing it there alone had no effect on what anyone
+ * sees. This is the value that actually decides it, which is why it lives in
+ * one place rather than as a literal in each page: they had drifted to 30, 30
+ * and 90 days, so the dashboard's totals covered a different period than the
+ * list you reached by clicking through them.
+ */
+export const DEFAULT_RANGE_DAYS = 7;

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import DateRangeFilter from '../components/DateRangeFilter';
-import { formatDate, toDateInput, toUnix, nowMinus } from '../lib/utils';
+import { formatDate, toDateInput, toUnix, nowMinus, DEFAULT_RANGE_DAYS } from '../lib/utils';
 
 const RESULT_OPTIONS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'NEEDS_REVIEW', 'UNKNOWN'];
 
@@ -10,7 +10,7 @@ export default function CandidateList() {
   const [applicants, setApplicants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [startDate, setStartDate] = useState(toDateInput(nowMinus(30)));
+  const [startDate, setStartDate] = useState(toDateInput(nowMinus(DEFAULT_RANGE_DAYS)));
   const [endDate, setEndDate] = useState(toDateInput(Math.floor(Date.now() / 1000)));
   const [resultFilter, setResultFilter] = useState('');
   const navigate = useNavigate();

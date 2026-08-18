@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import SummaryCard from '../components/SummaryCard';
 import DateRangeFilter from '../components/DateRangeFilter';
-import { toDateInput, toUnix, nowMinus } from '../lib/utils';
+import { toDateInput, toUnix, nowMinus, DEFAULT_RANGE_DAYS } from '../lib/utils';
 
 const RESULT_OPTIONS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'NEEDS_REVIEW', 'UNKNOWN'];
 
@@ -59,7 +59,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [startDate, setStartDate] = useState(toDateInput(nowMinus(90)));
+  const [startDate, setStartDate] = useState(toDateInput(nowMinus(DEFAULT_RANGE_DAYS)));
   const [endDate, setEndDate] = useState(toDateInput(Math.floor(Date.now() / 1000)));
   const [resultFilter, setResultFilter] = useState('');
   const [refreshing, setRefreshing] = useState(false);

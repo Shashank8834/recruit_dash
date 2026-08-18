@@ -1,7 +1,7 @@
 # Recruitment Dashboard
 
 WhatsApp-driven recruitment pipeline: Evolution API → Express webhook → Postgres →
-Gemini classification → React dashboard. **No n8n.**
+LLM classification → React dashboard. **No n8n.**
 
 ## How it works
 
@@ -152,13 +152,43 @@ drawn from your actual traffic is worth far more than any prompt tweak made blin
 The dashboard's **Pipeline** panel (chats mid-batch / unclassified / failed / sheet
 backlog) is the fastest way to spot a stuck worker or a failing sheet sync.
 
-## Swapping the model provider
+## Choosing a model provider
 
-`backend/src/services/llm.js` is the only file that talks to a provider. It takes
-`(system, prompt, schema)` and returns parsed JSON, so replacing Gemini means
-rewriting that one file. `GEMINI_MODEL` is env-configurable because model IDs get
-renamed and retired — a 404 from the classifier should be a config change, not a
-code change.
+`backend/src/services/llm.js` is the only file that talks to a provider, and it
+supports two backends out of the box:
+
+```bash
+LLM_PROVIDER=gemini          # Google's native API, schema enforced server-side
+
+LLM_PROVIDER=openai          # any OpenAI-compatible /chat/completions endpoint
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_API_KEY=gsk_...
+LLM_MODEL=openai/gpt-oss-120b
+LLM_MAX_RPM=25
+```
+
+The second covers Groq, OpenRouter, Cerebras, Together and a local Ollama,
+since they share a wire format.
+
+**Requests per minute is the limit that bites here**, not tokens. This workload
+makes many small calls, so a free tier that is generous on tokens and stingy on
+requests is the wrong shape. Gemini's free tier allows 5 rpm *per Google Cloud
+project* — minting another key does not help, because the quota is not per key.
+Groq's free tier is roughly 30 rpm.
+
+**Model ids are retired regularly.** Rather than trusting documentation:
+
+```bash
+npm run llm:models    # ask the provider what it currently serves
+```
+
+A 404 from the classifier should be a config change, not a code change — which
+is why the model is env-configurable and the error names the command above.
+
+Schema handling differs between the two. Gemini enforces the response schema
+server-side; compatible providers vary, so the schema is stated in the system
+prompt and the parsed result is checked for its required fields. A wrong shape
+is retried rather than flowing downstream as a half-filled verdict.
 
 Likewise, `backend/src/services/evolution.js` is the only file that knows Evolution's
 webhook format. Moving to Baileys or the WhatsApp Cloud API means rewriting it and

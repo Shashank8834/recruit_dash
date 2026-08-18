@@ -12,7 +12,8 @@
     "seed:dev": "node scripts/seed-dev.js",
     "eval": "node scripts/eval.js",
     "eval:load": "node scripts/eval.js --load",
-    "backfill": "node scripts/backfill.js"
+    "backfill": "node scripts/backfill.js",
+    "llm:models": "node scripts/llm-models.js"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",

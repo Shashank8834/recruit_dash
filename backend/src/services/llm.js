@@ -32,7 +32,14 @@ const REQUEST_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10);
 // The GEMINI_* names came first; they are still honoured so existing .env
 // files keep working after a provider switch.
 const MAX_RPM = parseFloat(process.env.LLM_MAX_RPM || process.env.GEMINI_MAX_RPM || '4');
-const MODEL = process.env.LLM_MODEL || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+
+// Falling back to a Gemini model id while pointed at an OpenAI-compatible
+// endpoint yields a confusing 404 about a model that was never going to exist
+// there, so each provider gets its own default.
+const MODEL =
+  PROVIDER === 'gemini'
+    ? (process.env.LLM_MODEL || process.env.GEMINI_MODEL || 'gemini-3.5-flash')
+    : (process.env.LLM_MODEL || 'openai/gpt-oss-120b');
 
 const RETRYABLE =
   /429|500|502|503|504|overloaded|unavailable|deadline|ECONNRESET|ETIMEDOUT|TRUNCATED_JSON|INVALID_JSON|SCHEMA_MISMATCH/i;
@@ -139,9 +146,17 @@ async function callOpenAICompatible({ system, prompt, schema, model, attempt }) 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       const retryAfter = response.headers.get('retry-after');
+      // Providers retire model ids regularly. A bare 404 sends people hunting
+      // through docs; name the cause and the command that resolves it.
+      const hint =
+        response.status === 404 || /model_not_found|does not exist/i.test(body)
+          ? `
+  Model "${model}" is not available at ${base}. ` +
+            'Run `npm run llm:models` to list what is, then set LLM_MODEL.'
+          : '';
       throw new Error(
         `${response.status} ${body.slice(0, 300)}` +
-        (retryAfter ? ` retry-after: ${retryAfter}` : '')
+        (retryAfter ? ` retry-after: ${retryAfter}` : '') + hint
       );
     }
 

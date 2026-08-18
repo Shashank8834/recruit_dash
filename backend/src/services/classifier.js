@@ -9,6 +9,26 @@ const PROMPT_VERSION = 'v3-two-stage';
 
 const NEEDS_REVIEW_BELOW = parseFloat(process.env.CONFIDENCE_FLOOR || '0.6');
 
+/**
+ * Prompt size budget, in characters (~4 per token).
+ *
+ * Providers meter tokens per minute, and a single oversized request is simply
+ * rejected — waiting does not help, only sending less does. The matcher is the
+ * expensive call because it carries every open role plus the candidate's full
+ * CV, so it degrades gracefully instead of being truncated arbitrarily:
+ * requirements are kept (high signal, compact) and free-text descriptions are
+ * shortened first.
+ */
+const PROMPT_BUDGET_CHARS = parseInt(process.env.MATCH_PROMPT_CHARS || '12000', 10);
+const JD_TEXT_CHARS = parseInt(process.env.MATCH_JD_TEXT_CHARS || '450', 10);
+const CANDIDATE_CHARS = parseInt(process.env.MATCH_CANDIDATE_CHARS || '5000', 10);
+
+function clip(text, max, label) {
+  if (!text) return '';
+  return text.length <= max ? text : `${text.slice(0, max)}
+[…${label} truncated]`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Stage 1 — routing                                                    */
 /* ------------------------------------------------------------------ */
@@ -180,18 +200,53 @@ const MATCHER_SCHEMA = {
   required: ['jd_external_id', 'verdict', 'confidence', 'reason', 'evidence'],
 };
 
-function renderJds(jds) {
-  if (jds.length === 0) return '(no open roles)';
-  return jds
-    .map((jd) => {
+/**
+ * Renders the open roles within a character budget.
+ *
+ * Requirements are what the matcher actually grades against, so they are kept
+ * in full and the free-text description is shortened first. Dropping whole
+ * roles is the last resort: a role the model never sees can never be matched,
+ * and its absence is indistinguishable from a genuine NONE verdict.
+ *
+ * @returns {{text: string, included: number, dropped: number}}
+ */
+function renderJds(jds, budgetChars, jdTextChars) {
+  if (!jds || jds.length === 0) {
+    return { text: '(no open roles)', included: 0, dropped: 0 };
+  }
+
+  const render = (textChars) =>
+    jds.map((jd) => {
       const reqs = Array.isArray(jd.requirements) ? jd.requirements : [];
       const reqBlock = reqs.length
-        ? `\nStated requirements:\n${reqs.map((r) => `- ${r}`).join('\n')}`
+        ? `\nRequirements:\n${reqs.map((r) => `- ${r}`).join('\n')}`
         : '';
-      return `## ${jd.external_id}${jd.title ? ` — ${jd.title}` : ''}
-${jd.jd_text}${reqBlock}`;
-    })
-    .join('\n\n---\n\n');
+      const body = textChars > 0 ? `\n${clip(jd.jd_text, textChars, 'description')}` : '';
+      return `## ${jd.external_id}${jd.title ? ` — ${jd.title}` : ''}${body}${reqBlock}`;
+    });
+
+  // Shorten descriptions before dropping any role.
+  for (const textChars of [jdTextChars, Math.floor(jdTextChars / 2), 0]) {
+    const joined = render(textChars).join('\n\n---\n\n');
+    if (joined.length <= budgetChars) {
+      return { text: joined, included: jds.length, dropped: 0 };
+    }
+  }
+
+  // Still over budget: keep as many roles as fit on titles and requirements.
+  const parts = render(0);
+  const kept = [];
+  let used = 0;
+  for (const part of parts) {
+    if (used + part.length > budgetChars) break;
+    kept.push(part);
+    used += part.length + 8;
+  }
+  return {
+    text: kept.join('\n\n---\n\n'),
+    included: kept.length,
+    dropped: parts.length - kept.length,
+  };
 }
 
 async function match({ text, jds }) {
@@ -207,17 +262,51 @@ async function match({ text, jds }) {
     };
   }
 
-  const prompt = `# Open roles
-${renderJds(jds)}
+  // Shrink and retry on a token-limit rejection. Retrying unchanged would fail
+  // identically, since the request itself is over the ceiling.
+  let budget = PROMPT_BUDGET_CHARS;
+  let jdTextChars = JD_TEXT_CHARS;
+  let candidateChars = CANDIDATE_CHARS;
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const rendered = renderJds(jds, budget, jdTextChars);
+    if (rendered.dropped > 0) {
+      console.warn(
+        `[classifier] prompt budget dropped ${rendered.dropped} role(s); ` +
+        'raise MATCH_PROMPT_CHARS or lower MATCH_JD_LIMIT so every open role is considered'
+      );
+    }
+
+    const prompt = `# Open roles
+${rendered.text}
 
 # Candidate message
-${text}`;
+${clip(text, candidateChars, 'CV')}`;
 
-  const { data, model, usage } = await generateJson({
-    system: MATCHER_SYSTEM,
-    prompt,
-    schema: MATCHER_SCHEMA,
-  });
+    try {
+      const { data, model, usage } = await generateJson({
+        system: MATCHER_SYSTEM,
+        prompt,
+        schema: MATCHER_SCHEMA,
+      });
+      return buildMatchResult(data, model, usage);
+    } catch (err) {
+      lastError = err;
+      if (!/TOKEN_LIMIT/.test(err.message || '') || attempt === 3) throw err;
+      budget = Math.floor(budget / 2);
+      jdTextChars = Math.floor(jdTextChars / 2);
+      candidateChars = Math.floor(candidateChars / 2);
+      console.warn(
+        `[classifier] request over the token ceiling; retrying with a ` +
+        `${budget}-char role budget and a ${candidateChars}-char candidate excerpt`
+      );
+    }
+  }
+  throw lastError;
+}
+
+function buildMatchResult(data, model, usage) {
 
   const jdExternalId =
     data.jd_external_id && data.jd_external_id !== 'NONE' ? data.jd_external_id : null;
@@ -248,6 +337,8 @@ function applyConfidenceFloor(result) {
 module.exports = {
   route,
   match,
+  renderJds, // exported for tests: prompt budgeting is easy to get subtly wrong
+  clip,
   applyConfidenceFloor,
   PROMPT_VERSION,
   NEEDS_REVIEW_BELOW,

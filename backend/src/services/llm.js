@@ -26,7 +26,10 @@ const PROVIDER = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
 
 const MAX_ATTEMPTS = parseInt(process.env.LLM_MAX_ATTEMPTS || '4', 10);
 const MAX_BACKOFF_MS = parseInt(process.env.LLM_MAX_BACKOFF_MS || '90000', 10);
-const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '4096', 10);
+// Providers count the RESERVED output budget against tokens-per-minute, not
+// just what is actually generated, so an oversized max_tokens silently halves
+// the room available for the prompt. Our schemas need far less than 4k.
+const MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '2048', 10);
 const REQUEST_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10);
 
 // The GEMINI_* names came first; they are still honoured so existing .env
@@ -148,6 +151,11 @@ async function callOpenAICompatible({ system, prompt, schema, model, attempt }) 
       const retryAfter = response.headers.get('retry-after');
       // Providers retire model ids regularly. A bare 404 sends people hunting
       // through docs; name the cause and the command that resolves it.
+      if (response.status === 413 || /too large|tokens per minute \(TPM\)|context length/i.test(body)) {
+        // Distinct from a rate limit: waiting cannot help, because a single
+        // request exceeds the ceiling. The caller has to send less.
+        throw new Error(`TOKEN_LIMIT ${response.status} ${body.slice(0, 240)}`);
+      }
       const hint =
         response.status === 404 || /model_not_found|does not exist/i.test(body)
           ? `

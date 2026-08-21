@@ -10,6 +10,11 @@ const jdsRoutes = require('./routes/jds');
 const applicantsRoutes = require('./routes/applicants');
 const webhookRoutes = require('./routes/webhook');
 const reviewRoutes = require('./routes/review');
+// The manual side: uploaded CVs and hand-written roles. Mounted under their own
+// paths and backed by their own tables, so nothing the WhatsApp pipeline writes
+// can appear here by accident.
+const candidatesRoutes = require('./routes/candidates');
+const manualJobsRoutes = require('./routes/manualJobs');
 const sheetMirror = require('./services/sheetMirror');
 const rateLimiter = require('./services/rateLimiter');
 
@@ -24,6 +29,8 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/jds', jdsRoutes);
 app.use('/api/applicants', applicantsRoutes);
 app.use('/api/review', reviewRoutes);
+app.use('/api/candidates', candidatesRoutes);
+app.use('/api/roles', manualJobsRoutes);
 app.use('/webhook', webhookRoutes);
 
 app.get('/api/health', async (_req, res) => {

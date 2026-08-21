@@ -6,6 +6,12 @@ import JDDetail from './pages/JDDetail';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import Review from './pages/Review';
+// The manual side. Separate routes and separate pages from the WhatsApp
+// screens above, because the data behind them is separate too.
+import TalentPool from './pages/TalentPool';
+import TalentDetail from './pages/TalentDetail';
+import ManualRoles from './pages/ManualRoles';
+import ManualRoleDetail from './pages/ManualRoleDetail';
 
 export default function App() {
   return (
@@ -18,6 +24,11 @@ export default function App() {
         <Route path="/candidates" element={<CandidateList />} />
         <Route path="/candidates/:id" element={<CandidateDetail />} />
         <Route path="/review" element={<Review />} />
+
+        <Route path="/talent" element={<TalentPool />} />
+        <Route path="/talent/:id" element={<TalentDetail />} />
+        <Route path="/roles" element={<ManualRoles />} />
+        <Route path="/roles/:id" element={<ManualRoleDetail />} />
       </Routes>
     </Layout>
   );

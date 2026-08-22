@@ -118,24 +118,40 @@ router.post('/:id/suggest', async (req, res) => {
 
     const scored = await talentMatch.score(job, candidates);
 
+    // Recorded one at a time, tolerating individual failures. The model call is
+    // already paid for by this point, so letting one unwritable row abort the
+    // loop would throw away every other verdict in the batch and charge for the
+    // whole thing again on retry.
+    let recorded = 0;
+    const writeErrors = [];
     for (const result of scored) {
-      await manualJobsRepo.recordSuggestion({
-        manualJobId: job.id,
-        source: result.source,
-        candidateId: result.candidateId,
-        submissionId: result.submissionId,
-        verdict: result.verdict,
-        confidence: result.confidence,
-        reason: result.reason,
-        evidence: [],
-        model: result.model,
-        promptVersion: talentMatch.PROMPT_VERSION,
-      });
+      try {
+        await manualJobsRepo.recordSuggestion({
+          manualJobId: job.id,
+          source: result.source,
+          candidateId: result.candidateId,
+          submissionId: result.submissionId,
+          verdict: result.verdict,
+          confidence: result.confidence,
+          reason: result.reason,
+          evidence: [],
+          model: result.model,
+          promptVersion: talentMatch.PROMPT_VERSION,
+        });
+        recorded += 1;
+      } catch (err) {
+        console.error(`[roles] could not record ${result.key}: ${err.message}`);
+        writeErrors.push({ candidate: result.key, error: err.message });
+      }
     }
 
     res.json({
       job: job.external_id,
       considered: candidates.length,
+      recorded,
+      // Surfaced rather than logged only: a suggestion list that is quietly
+      // short looks complete, and nobody goes looking for the missing rows.
+      ...(writeErrors.length ? { errors: writeErrors } : {}),
       suggestions: await manualJobsRepo.suggestionsFor(job.id),
     });
   } catch (err) {

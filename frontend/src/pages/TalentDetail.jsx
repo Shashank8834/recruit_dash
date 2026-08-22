@@ -62,7 +62,12 @@ export default function TalentDetail() {
         body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error(`Server error ${response.status}`);
-      setCandidate(await response.json());
+      // Merged, not replaced. The PATCH response omits raw_text — list columns
+      // deliberately exclude it, since it is the whole document — so assigning
+      // the response wholesale blanked the CV text the moment anyone corrected
+      // a field, exactly when they most want to check it against the source.
+      const updated = await response.json();
+      setCandidate((current) => ({ ...current, ...updated }));
       setDraft({});
       setSaved(true);
     } catch (e) {

@@ -89,9 +89,16 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
               s.combined_text,
               ts_rank(to_tsvector('english', coalesce(s.combined_text,'')), q.tsq) AS rank
          FROM submissions s, q
-         JOIN classifications cl ON cl.submission_id = s.id AND cl.is_current
          LEFT JOIN contacts ct ON ct.id = s.contact_id
         WHERE s.kind = 'application'
+          -- EXISTS, not a join: a submission can hold more than one live
+          -- classification, and joining would put the same person in the
+          -- shortlist twice — paying for them twice in the prompt and letting
+          -- one candidate crowd out another.
+          AND EXISTS (
+            SELECT 1 FROM classifications cl
+             WHERE cl.submission_id = s.id AND cl.is_current
+          )
         ORDER BY rank DESC, s.created_at DESC
         LIMIT $2`,
       [terms, perPool]
@@ -179,6 +186,37 @@ const SCHEMA = {
   required: ['matches'],
 };
 
+const VERDICTS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE'];
+
+/**
+ * Coerces the model's verdict and confidence into values the database accepts.
+ *
+ * The schema declares an enum, but it is only advisory on an OpenAI-compatible
+ * provider: response_format guarantees valid JSON, not a valid shape, and
+ * assertShape checks top-level keys only. So `verdict` arrives as unvalidated
+ * text on its way into a column with a CHECK constraint — "strong" in
+ * lowercase, or an invented "EXCELLENT", raises a constraint violation after
+ * the model call has already been paid for.
+ *
+ * Confidence has the same problem in numeric form. The column is NUMERIC(4,3),
+ * so a model answering 95 rather than 0.95 overflows it. A percentage is a
+ * recognisable mistake and is rescaled; anything still out of range is dropped
+ * to null, because a wrong confidence silently changes which candidates a
+ * recruiter is told to review.
+ */
+function coerceVerdict(raw) {
+  const upper = String(raw || '').trim().toUpperCase().replace(/[^A-Z_]/g, '');
+  return VERDICTS.includes(upper) ? upper : null;
+}
+
+function coerceConfidence(raw) {
+  const value = typeof raw === 'number' ? raw : parseFloat(raw);
+  if (!Number.isFinite(value)) return null;
+  if (value >= 0 && value <= 1) return Math.round(value * 1000) / 1000;
+  if (value > 1 && value <= 100) return Math.round(value * 10) / 1000;
+  return null;
+}
+
 function renderJob(job) {
   const reqs = Array.isArray(job.requirements) ? job.requirements : [];
   const minYears = job.min_experience_years;
@@ -234,13 +272,39 @@ ${candidates.map((c) => `## ${c.key}\n${c.profile}`).join('\n\n---\n\n')}`;
         model,
       };
     }
+    const verdict = coerceVerdict(scored.verdict);
+    if (!verdict) {
+      // An unrecognised verdict is not a judgement, so it must not be recorded
+      // as one — and it must not be dropped either, or the candidate silently
+      // vanishes from a list they were considered for.
+      return {
+        ...candidate,
+        verdict: 'NEEDS_REVIEW',
+        confidence: null,
+        reason: `Unrecognised verdict from the model (${JSON.stringify(scored.verdict)}).`,
+        model,
+      };
+    }
+
     const floored = applyConfidenceFloor({
-      verdict: scored.verdict,
-      confidence: typeof scored.confidence === 'number' ? scored.confidence : null,
+      verdict,
+      confidence: coerceConfidence(scored.confidence),
       reason: scored.reason || null,
     });
     return { ...candidate, ...floored, model };
   });
 }
 
-module.exports = { shortlist, score, renderJob, searchTerms, PROMPT_VERSION, SHORTLIST_SIZE };
+module.exports = {
+  shortlist,
+  score,
+  renderJob,
+  searchTerms,
+  // Exported for tests: the model's output is unvalidated on an
+  // OpenAI-compatible provider, and these are what stand between it and a
+  // constraint violation.
+  coerceVerdict,
+  coerceConfidence,
+  PROMPT_VERSION,
+  SHORTLIST_SIZE,
+};

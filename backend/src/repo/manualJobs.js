@@ -156,8 +156,17 @@ async function suggestionsFor(manualJobId) {
        LEFT JOIN candidates c   ON c.id = s.candidate_id
        LEFT JOIN submissions sub ON sub.id = s.submission_id
        LEFT JOIN contacts ct    ON ct.id = sub.contact_id
-       LEFT JOIN classifications cl
-              ON cl.submission_id = sub.id AND cl.is_current
+       -- One row per suggestion, whatever the classification history holds.
+       -- A submission may carry several live classifications (the partial
+       -- unique index is per jd_id, not per submission), and a plain LEFT JOIN
+       -- would then list the same person once per verdict — looking like
+       -- duplicate candidates in a recruiter's shortlist.
+       LEFT JOIN LATERAL (
+         SELECT c2.id FROM classifications c2
+          WHERE c2.submission_id = sub.id AND c2.is_current
+          ORDER BY c2.created_at DESC
+          LIMIT 1
+       ) cl ON true
       WHERE s.manual_job_id = $1
       ORDER BY
         CASE s.verdict

@@ -56,7 +56,20 @@ export default function TalentPool() {
     setUploadResult(null);
     try {
       const response = await fetch('/api/candidates', { method: 'POST', body: form });
-      const data = await response.json();
+      // Not every failure comes from the app. A file over the proxy's limit is
+      // rejected by nginx with an HTML error page, and calling .json() on that
+      // throws a parse error that tells the user nothing about the real cause.
+      const body = await response.text();
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new Error(
+          response.status === 413
+            ? 'That file is too large for the server to accept.'
+            : `Upload failed (HTTP ${response.status}).`
+        );
+      }
       // 207 means some files worked and some did not, so the result is
       // reported either way rather than treated as a plain success or failure.
       setUploadResult(data);

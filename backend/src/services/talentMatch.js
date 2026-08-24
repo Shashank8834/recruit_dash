@@ -188,6 +188,11 @@ const SCHEMA = {
 
 const VERDICTS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE'];
 
+/** Strips the decoration models add around an identifier they were asked to echo. */
+function normaliseRef(ref) {
+  return String(ref || '').toUpperCase().replace(/[^A-Z0-9_]/g, '');
+}
+
 /**
  * Coerces the model's verdict and confidence into values the database accepts.
  *
@@ -254,12 +259,18 @@ ${candidates.map((c) => `## ${c.key}\n${c.profile}`).join('\n\n---\n\n')}`;
     maxOutputTokens: OUTPUT_TOKENS,
   });
 
+  // Matched on a normalised reference, not the literal string. The model has
+  // to echo back an identifier it was given in a markdown heading, and it
+  // routinely returns "## CAND_1001", "cand_1001" or the id in quotes. An exact
+  // lookup misses every one of those, and the failure is silent and total: each
+  // candidate falls through to "the model did not return a verdict", so a
+  // working suggestion run looks like a broken one.
   const byRef = new Map(
-    (Array.isArray(data.matches) ? data.matches : []).map((m) => [m.ref, m])
+    (Array.isArray(data.matches) ? data.matches : []).map((m) => [normaliseRef(m.ref), m])
   );
 
   return candidates.map((candidate) => {
-    const scored = byRef.get(candidate.key);
+    const scored = byRef.get(normaliseRef(candidate.key));
     if (!scored) {
       // Asked for and not returned. Recorded as an explicit review item rather
       // than dropped: "the model skipped this one" and "this one is a poor
@@ -300,6 +311,7 @@ module.exports = {
   score,
   renderJob,
   searchTerms,
+  normaliseRef,
   // Exported for tests: the model's output is unvalidated on an
   // OpenAI-compatible provider, and these are what stand between it and a
   // constraint violation.

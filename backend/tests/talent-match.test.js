@@ -50,3 +50,23 @@ test('confidence is rounded to what the column can store', () => {
   // NUMERIC(4,3) keeps three decimals; more would be silently truncated.
   assert.equal(coerceConfidence(0.123456), 0.123);
 });
+
+const { normaliseRef } = require('../src/services/talentMatch');
+
+test('candidate references survive the decoration models add', () => {
+  // The reference is handed to the model inside a markdown heading, and it
+  // echoes back what it saw. An exact-string lookup misses every variation, and
+  // the failure is silent and total: every candidate falls through to "no
+  // verdict returned", so a working run looks like a broken one.
+  const expected = 'CAND_1001';
+  for (const variant of ['CAND_1001', '## CAND_1001', 'cand_1001', '"CAND_1001"', ' CAND_1001 ']) {
+    assert.equal(normaliseRef(variant), expected, variant);
+  }
+  assert.equal(normaliseRef('WA_123'), 'WA_123');
+});
+
+test('normalising does not merge two different candidates', () => {
+  // Stripping punctuation must not make distinct ids collide.
+  assert.notEqual(normaliseRef('CAND_1001'), normaliseRef('CAND_1002'));
+  assert.notEqual(normaliseRef('CAND_1001'), normaliseRef('WA_1001'));
+});

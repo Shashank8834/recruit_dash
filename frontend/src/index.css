@@ -99,6 +99,27 @@
     @apply font-mono text-xs tracking-tight text-ink-2;
   }
 
+  /* The manual screens were written against these four and they were never
+     defined, so every panel rendered as bare text, every callout as an
+     unmarked paragraph, and the "clickable" rows had neither a pointer nor a
+     hover. Defined here rather than replaced inline, because the names are
+     already the vocabulary those pages are written in. */
+  .mono {
+    @apply font-mono text-xs tracking-tight text-ink-2;
+  }
+
+  .panel {
+    @apply border border-rule bg-surface px-6 py-8;
+  }
+
+  .callout {
+    @apply border-l-2 border-ink bg-surface px-4 py-3 text-sm text-ink;
+  }
+
+  .row {
+    @apply cursor-pointer border-b border-rule transition-colors hover:bg-surface;
+  }
+
   /* Controls -------------------------------------------------------------- */
   .input {
     @apply border border-rule bg-paper px-3 py-1.5 text-sm text-ink

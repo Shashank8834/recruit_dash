@@ -2,8 +2,82 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 const applicantsRepo = require('../repo/applicants');
+const manualJobsRepo = require('../repo/manualJobs');
 const { dateRange } = require('../dateRange');
 
+/**
+ * The overview of the side a recruiter curates: hand-written roles and the
+ * talent pool.
+ *
+ * Separate from GET / below, which reports on the WhatsApp pipeline. The two
+ * answer different questions and are read by different people at different
+ * times — "where are my roles up to" is a daily question about work in
+ * progress, while "is the ingest healthy" is one you ask when something looks
+ * wrong. Merging them produced a screen where the number that mattered was
+ * never the one you were looking at.
+ *
+ * Every figure here counts the whole pool, with no date window. A talent pool
+ * is an asset that accumulates; a CV uploaded in March is exactly as useful in
+ * August, and windowing it would report a shrinking pool that is in fact
+ * growing.
+ */
+router.get('/managed', async (_req, res) => {
+  try {
+    const [stages, talent, matches, recentRoles, recentCandidates] = await Promise.all([
+      manualJobsRepo.countsByStage(),
+      query(
+        `SELECT COUNT(*)::int                                            AS total,
+                COUNT(*) FILTER (WHERE entry_mode = 'upload')::int       AS uploaded,
+                COUNT(*) FILTER (WHERE entry_mode = 'manual')::int       AS hand_entered,
+                COUNT(*) FILTER (WHERE file_data IS NOT NULL)::int       AS with_cv,
+                COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::int  AS added_7d,
+                COUNT(*) FILTER (WHERE created_at >= now() - interval '30 days')::int AS added_30d,
+                (SELECT COUNT(*)::int FROM candidate_notes)              AS notes,
+                (SELECT COUNT(DISTINCT candidate_id)::int FROM candidate_notes) AS with_notes
+           FROM candidates`
+      ),
+      query(
+        `SELECT COUNT(*) FILTER (WHERE verdict = 'STRONG')::int  AS strong,
+                COUNT(*) FILTER (WHERE verdict = 'PARTIAL')::int AS partial,
+                COUNT(*)::int                                    AS total
+           FROM job_match_suggestions`
+      ),
+      query(
+        `SELECT j.external_id, j.title, j.company, j.status, j.created_at,
+                (SELECT COUNT(*)::int FROM job_match_suggestions s
+                  WHERE s.manual_job_id = j.id AND s.verdict IN ('STRONG','PARTIAL')
+                ) AS match_count
+           FROM manual_jobs j
+          ORDER BY j.created_at DESC LIMIT 5`
+      ),
+      query(
+        `SELECT external_id, name, current_designation, current_company,
+                entry_mode, created_at
+           FROM candidates ORDER BY created_at DESC LIMIT 5`
+      ),
+    ]);
+
+    const active = stages.open + stages.reviewing;
+    res.json({
+      roles: {
+        stages,
+        total: Object.values(stages).reduce((a, b) => a + b, 0),
+        // "Live" is open plus reviewing: both are roles someone is still
+        // working, and splitting them here would understate the load.
+        active,
+      },
+      talent: talent.rows[0],
+      matches: matches.rows[0],
+      recentRoles: recentRoles.rows,
+      recentCandidates: recentCandidates.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** The WhatsApp side: what the pipeline ingested and how it is holding up. */
 router.get('/', async (req, res) => {
   try {
     const { start, end } = dateRange(req);

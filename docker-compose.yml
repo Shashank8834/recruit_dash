@@ -63,6 +63,9 @@ services:
       - BATCH_MAX_WINDOW_SECONDS=${BATCH_MAX_WINDOW_SECONDS:-600}
       - CONFIDENCE_FLOOR=${CONFIDENCE_FLOOR:-0.6}
       - DASHBOARD_DEFAULT_DAYS=${DASHBOARD_DEFAULT_DAYS:-7}
+      # Decides how timestamps read in the CSV exports. Containers default to
+      # UTC, which shows an upload logged at 13:04 IST as 07:34.
+      - TZ=${TZ:-UTC}
       - CV_UPLOAD_MAX_MB=${CV_UPLOAD_MAX_MB:-15}
       - CV_EXTRACT_CHARS=${CV_EXTRACT_CHARS:-12000}
       - CV_EXTRACT_OUTPUT_TOKENS=${CV_EXTRACT_OUTPUT_TOKENS:-1024}

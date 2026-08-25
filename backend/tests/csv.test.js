@@ -50,3 +50,43 @@ test('a full export round-trips to the right shape', () => {
   const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
   assert.deepEqual(lines, ['Name,Experience', 'Ada,4.5', '"Grace, R",']);
 });
+
+test('a timestamp exports as something a spreadsheet can sort', () => {
+  // An ISO instant ("2026-08-25T07:34:41.227Z") is read as text by Excel and
+  // Sheets, which is why an exported date column could not be sorted on.
+  const rendered = cell(new Date(2026, 7, 25, 13, 4, 41));
+  assert.equal(rendered, '2026-08-25 13:04');
+  assert.ok(!rendered.includes('T'), 'no ISO separator');
+  assert.ok(!rendered.includes('Z'), 'no zone suffix');
+});
+
+test('stored values are renamed for whoever reads the sheet', () => {
+  const columns = [
+    { key: 'entry_mode', label: 'Entered via', map: { upload: 'CV upload', manual: 'By hand' } },
+  ];
+  const rows = [{ entry_mode: 'manual' }, { entry_mode: 'upload' }, { entry_mode: 'imported' }];
+  const lines = toCsv(columns, rows).trim().split('\r\n');
+
+  assert.deepEqual(lines.slice(1), ['By hand', 'CV upload', 'imported']);
+});
+
+test('a value with no mapping is passed through, not blanked', () => {
+  // A stage added to the database before this list is updated must still
+  // appear. Silently emptying the cell would look like missing data.
+  const columns = [{ key: 'status', label: 'Stage', map: { open: 'Open' } }];
+  const [, row] = toCsv(columns, [{ status: 'reviewing' }]).trim().split('\r\n');
+  assert.equal(row, 'reviewing');
+});
+
+test('notes spanning several lines survive as one cell', () => {
+  const columns = [
+    { key: 'external_id', label: 'ID' },
+    { key: 'notes', label: 'Notes' },
+  ];
+  const notes = '2026-08-25 Akhilesh: Referred by Priya.\n2026-08-26: Wants hybrid.';
+  const csv = toCsv(columns, [{ external_id: 'CAND_1001', notes }]);
+
+  assert.ok(csv.includes(`"${notes}"`), 'the whole note block stays in one quoted cell');
+  // Two notes, one row: the row terminator is CRLF and the note breaks are not.
+  assert.equal(csv.trimEnd().split('\r\n').length, 2);
+});

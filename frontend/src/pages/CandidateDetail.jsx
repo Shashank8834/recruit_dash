@@ -60,7 +60,7 @@ export default function CandidateDetail() {
     try {
       const r = await fetch(`/api/applicants/${id}`, { method: 'DELETE' });
       if (!r.ok) throw new Error(`Server error ${r.status}`);
-      navigate('/candidates', { replace: true });
+      navigate('/whatsapp?tab=applicants', { replace: true });
     } catch (e) {
       setError(e.message);
       setDeleting(false);

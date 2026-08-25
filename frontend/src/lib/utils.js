@@ -1,15 +1,38 @@
-export function formatDate(unixTs) {
-  if (!unixTs) return '—';
-  return new Date(unixTs * 1000).toLocaleDateString('en-US', {
+/**
+ * Two timestamp shapes reach this file, and both have to work.
+ *
+ * The WhatsApp screens read serialized rows, where every date is unix seconds.
+ * The manual screens read Postgres rows straight out of the repo, where a
+ * TIMESTAMPTZ arrives as an ISO string. Multiplying that string by 1000 gives
+ * NaN, and `new Date(NaN)` renders as "Invalid Date" — which is why the Added
+ * and Created columns on the talent pool and the roles list showed nothing
+ * useful. Both are dates; neither caller was wrong; so this is where they meet.
+ */
+function toDate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  // A number (or a numeric string) is unix seconds; anything else is a date
+  // string Date already knows how to read.
+  const date =
+    typeof value === 'number' || /^\d+$/.test(String(value))
+      ? new Date(Number(value) * 1000)
+      : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatDate(value) {
+  const date = toDate(value);
+  if (!date) return '—';
+  return date.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
 }
 
-export function formatDateTime(unixTs) {
-  if (!unixTs) return '—';
-  return new Date(unixTs * 1000).toLocaleString('en-US', {
+export function formatDateTime(value) {
+  const date = toDate(value);
+  if (!date) return '—';
+  return date.toLocaleString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

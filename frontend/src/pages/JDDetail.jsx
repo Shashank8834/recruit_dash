@@ -18,7 +18,7 @@ export default function JDDetail() {
     try {
       const r = await fetch(`/api/jds/${id}`, { method: 'DELETE' });
       if (!r.ok) throw new Error(`Server error ${r.status}`);
-      navigate('/jds', { replace: true });
+      navigate('/whatsapp?tab=messages', { replace: true });
     } catch (e) {
       setError(e.message);
       setDeleting(false);

@@ -151,7 +151,13 @@ function ReviewCard({ item, index, onResolved }) {
   );
 }
 
-export default function Review() {
+/**
+ * @param {(count: number) => void} [onCountChange]
+ *   Lets the page around this one keep its own badge honest. Clearing an item
+ *   here is the commonest way the queue shrinks, and without this the tab
+ *   still advertised the old number until a reload.
+ */
+export default function Review({ onCountChange }) {
   const [items, setItems] = useState([]);
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -161,30 +167,37 @@ export default function Review() {
     setLoading(true);
     fetch('/api/review/queue')
       .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
-      .then((d) => { setItems(d.items); setCount(d.count); setLoading(false); })
+      .then((d) => {
+        setItems(d.items);
+        setCount(d.count);
+        if (onCountChange) onCountChange(d.count);
+        setLoading(false);
+      })
       .catch((e) => { setError(e.message); setLoading(false); });
-  }, []);
+  }, [onCountChange]);
 
   useEffect(load, [load]);
 
   function handleResolved(classificationId) {
     setItems((prev) => prev.filter((i) => i.classification_id !== classificationId));
-    setCount((c) => Math.max(0, c - 1));
+    setCount((c) => {
+      const next = Math.max(0, c - 1);
+      if (onCountChange) onCountChange(next);
+      return next;
+    });
   }
 
+  // No masthead of its own: this renders inside the WhatsApp messages page,
+  // which supplies the title.
   return (
-    <div className="space-y-10">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-5">
-        <div className="max-w-xl">
-          <p className="micro">Recruitment</p>
-          <h1 className="page-title mt-1">Review</h1>
-          <p className="page-sub">
-            Messages the classifier wasn't confident enough to decide. Your verdict is
-            stored alongside the model's and always wins.
-          </p>
-        </div>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 border border-rule bg-surface px-5 py-4">
+        <p className="max-w-xl text-sm text-ink-2">
+          Messages the classifier wasn't confident enough to decide. Your verdict is
+          stored alongside the model's and always wins.
+        </p>
         <button onClick={load} className="btn">Refresh</button>
-      </header>
+      </div>
 
       {error && <div className="notice-error">Error: {error}</div>}
 

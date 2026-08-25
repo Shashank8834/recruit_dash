@@ -29,6 +29,9 @@ const SUGGEST_COLUMNS = [
   { key: 'reason', label: 'Reason' },
 ];
 
+/** The stages a role can sit at, so the UI does not hard-code its own copy. */
+router.get('/stages', (_req, res) => res.json(manualJobsRepo.STAGES));
+
 router.post('/', async (req, res) => {
   try {
     const { title } = req.body || {};
@@ -66,6 +69,14 @@ router.get('/:id', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
+    // Checked here so a bad stage is a 400 saying which values are allowed,
+    // rather than the CHECK constraint surfacing as an opaque 500.
+    const { status } = req.body || {};
+    if (status !== undefined && !manualJobsRepo.STAGES.includes(status)) {
+      return res.status(400).json({
+        error: `status must be one of ${manualJobsRepo.STAGES.join(', ')}`,
+      });
+    }
     const updated = await manualJobsRepo.update(req.params.id, req.body || {});
     if (!updated) return res.status(404).json({ error: 'Role not found' });
     res.json(updated);

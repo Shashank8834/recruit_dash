@@ -4,15 +4,21 @@ import { NavLink } from 'react-router-dom';
 /**
  * Two groups, not one list.
  *
- * The product now has two halves that must not be confused: what arrives from
- * the WhatsApp group on its own, and what a recruiter uploads or writes
- * themselves. They are backed by separate tables, so the navigation says so —
- * otherwise "Roles" and "Roles" sit next to each other meaning different
- * things, and the only way to tell them apart is to click.
+ * The product has two halves that must not be confused: what a recruiter
+ * curates here, and what arrives from the WhatsApp group on its own. They are
+ * backed by separate tables, so the navigation says so — otherwise "Roles" and
+ * "Roles" sit next to each other meaning different things, and the only way to
+ * tell them apart is to click.
+ *
+ * Managed here comes first and carries the Overview, because the reviewed and
+ * filtered side is the one the day is planned from. WhatsApp is a single
+ * destination rather than three: postings, applicants and the review queue are
+ * all the same inbox read three ways, and separating them made it a place you
+ * had to visit repeatedly instead of one you check.
  */
 const groups = [
   {
-    label: 'From WhatsApp',
+    label: 'Managed here',
     links: [
       {
         to: '/dashboard',
@@ -23,39 +29,6 @@ const groups = [
           </svg>
         ),
       },
-      {
-        to: '/jds',
-        label: 'Posted roles',
-        icon: (
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-            <path strokeLinecap="square" d="M5 3h9l5 5v13H5zM14 3v5h5M8 12h8M8 16h8" />
-          </svg>
-        ),
-      },
-      {
-        to: '/candidates',
-        label: 'Applicants',
-        icon: (
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-            <path strokeLinecap="square" d="M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0" />
-          </svg>
-        ),
-      },
-      {
-        to: '/review',
-        label: 'Review',
-        badgeKey: 'review',
-        icon: (
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-            <path strokeLinecap="square" d="M4 4h16v16H4zM8 12l3 3 5-6" />
-          </svg>
-        ),
-      },
-    ],
-  },
-  {
-    label: 'Managed here',
-    links: [
       {
         to: '/roles',
         label: 'Open roles',
@@ -71,6 +44,21 @@ const groups = [
         icon: (
           <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
             <path strokeLinecap="square" d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    label: 'From WhatsApp',
+    links: [
+      {
+        to: '/whatsapp',
+        label: 'WhatsApp messages',
+        badgeKey: 'review',
+        icon: (
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+            <path strokeLinecap="square" d="M4 4h16v12H8l-4 4z" />
           </svg>
         ),
       },

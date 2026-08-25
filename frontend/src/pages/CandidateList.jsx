@@ -29,16 +29,10 @@ export default function CandidateList() {
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [startDate, endDate, resultFilter]);
 
+  // No masthead of its own: this renders inside the WhatsApp messages page,
+  // which supplies the title.
   return (
-    <div className="space-y-10">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-5">
-        <div>
-          <p className="micro">Recruitment</p>
-          <h1 className="page-title mt-1">Candidates</h1>
-        </div>
-        <p className="tnum text-sm text-ink-2">{applicants.length} in range</p>
-      </header>
-
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-6 border border-rule bg-surface px-5 py-4">
         <DateRangeFilter
           startDate={startDate}
@@ -57,6 +51,7 @@ export default function CandidateList() {
             {RESULT_OPTIONS.map((r) => <option key={r} value={r}>{r.replace('_', ' ')}</option>)}
           </select>
         </label>
+        <p className="tnum text-sm text-ink-2">{applicants.length} in range</p>
       </div>
 
       {error && <div className="notice-error">Error: {error}</div>}

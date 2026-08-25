@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatDate } from '../lib/utils';
+import { STAGES, StageTag } from '../components/RoleStage';
 
 /**
  * Roles a recruiter writes by hand.
  *
- * Separate from /jds, which lists what the WhatsApp pipeline parsed out of
- * messages. A role here is something someone decided to hire for; a role there
- * is something someone happened to post in a group.
+ * Separate from the WhatsApp postings, which are what the pipeline parsed out
+ * of messages. A role here is something someone decided to hire for; a role
+ * there is something someone happened to post in a group.
  */
 export default function ManualRoles() {
   const [roles, setRoles] = useState([]);
@@ -17,15 +18,21 @@ export default function ManualRoles() {
   const [form, setForm] = useState({
     title: '', company: '', location: '', minExperienceYears: '', requirements: '', description: '',
   });
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+
+  // In the URL so the Overview's stage breakdown can link straight to one
+  // stage, and so a filtered list is a link someone can send.
+  const status = params.get('status') || '';
 
   const load = useCallback(() => {
     setLoading(true);
-    fetch('/api/roles')
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    fetch(`/api/roles${q}`)
       .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
       .then((d) => { setRoles(Array.isArray(d) ? d : []); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
-  }, []);
+  }, [status]);
 
   useEffect(load, [load]);
 
@@ -56,7 +63,7 @@ export default function ManualRoles() {
     <div className="space-y-10">
       <header className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-5">
         <div>
-          <p className="micro">Created manually</p>
+          <p className="micro">Managed here</p>
           <h1 className="page-title mt-1">Open roles</h1>
           <p className="page-sub">Write a role, then let the tool suggest matches from the database.</p>
         </div>
@@ -65,7 +72,7 @@ export default function ManualRoles() {
         </button>
       </header>
 
-      {error && <div className="callout">{error}</div>}
+      {error && <div className="notice-error">{error}</div>}
 
       {creating && (
         <form onSubmit={create} className="panel space-y-5">
@@ -132,13 +139,37 @@ export default function ManualRoles() {
         </form>
       )}
 
+      <div className="flex flex-wrap items-center gap-6 border border-rule bg-surface px-5 py-4">
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Stage</span>
+          <select
+            className="input"
+            value={status}
+            onChange={(e) => {
+              const next = e.target.value;
+              setParams(next ? { status: next } : {}, { replace: true });
+            }}
+          >
+            <option value="">All stages</option>
+            {STAGES.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
+          </select>
+        </label>
+        <p className="tnum text-sm text-ink-2">{roles.length} shown</p>
+      </div>
+
       {loading ? (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => <div key={i} className="skeleton h-12" />)}
         </div>
       ) : roles.length === 0 ? (
         <div className="panel text-center">
-          <p className="text-sm text-ink-2">No roles yet. Create one to start matching.</p>
+          <p className="text-sm text-ink-2">
+            {status
+              ? 'No roles at this stage.'
+              : 'No roles yet. Create one to start matching.'}
+          </p>
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -146,6 +177,7 @@ export default function ManualRoles() {
             <thead>
               <tr>
                 <th className="th">Role</th>
+                <th className="th">Stage</th>
                 <th className="th">Location</th>
                 <th className="th">Min experience</th>
                 <th className="th">Matches</th>
@@ -160,6 +192,7 @@ export default function ManualRoles() {
                     {role.company && <span className="block text-xs text-ink-2">{role.company}</span>}
                     <span className="mono block">{role.external_id}</span>
                   </td>
+                  <td className="td"><StageTag status={role.status} /></td>
                   <td className="td">{role.location || '—'}</td>
                   <td className="td tnum">
                     {role.min_experience_years === null ? '—' : `${role.min_experience_years} yr`}

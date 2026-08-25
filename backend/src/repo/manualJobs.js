@@ -5,6 +5,16 @@ const { query } = require('../db');
  * the WhatsApp pipeline parsed out of messages.
  */
 
+/**
+ * The stages a role moves through, in order.
+ *
+ * Exported rather than duplicated in the route and the UI: the order decides
+ * how the list sorts and how the picker reads, and three copies of it drift
+ * the first time a stage is added. The database CHECK is the enforcement; this
+ * is the ordering the CHECK cannot express.
+ */
+const STAGES = ['open', 'reviewing', 'placed', 'closed'];
+
 async function create({ title, company, location, description, requirements, minExperienceYears, createdBy }) {
   const { rows } = await query(
     `INSERT INTO manual_jobs
@@ -37,10 +47,23 @@ async function list({ status } = {}) {
             ) AS match_count
        FROM manual_jobs j
       WHERE ($1::text IS NULL OR j.status = $1)
-      ORDER BY j.created_at DESC`,
-    [status || null]
+      -- Stage first, newest within it. Sorted by date alone, a role closed
+      -- last week sits above three that are open right now, and the list stops
+      -- being a worklist.
+      ORDER BY array_position($2::text[], j.status), j.created_at DESC`,
+    [status || null, STAGES]
   );
   return rows;
+}
+
+/** How many roles sit at each stage. Every stage is present, zeroes included. */
+async function countsByStage() {
+  const { rows } = await query(
+    `SELECT status, COUNT(*)::int AS count FROM manual_jobs GROUP BY status`
+  );
+  const counts = Object.fromEntries(STAGES.map((s) => [s, 0]));
+  for (const row of rows) counts[row.status] = row.count;
+  return counts;
 }
 
 async function findByExternalId(externalId) {
@@ -180,6 +203,7 @@ async function suggestionsFor(manualJobId) {
 }
 
 module.exports = {
-  create, list, findByExternalId, update, remove,
+  STAGES,
+  create, list, countsByStage, findByExternalId, update, remove,
   recordSuggestion, suggestionsFor,
 };

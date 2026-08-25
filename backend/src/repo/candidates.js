@@ -1,32 +1,69 @@
 const { query } = require('../db');
 
 /**
- * Uploaded CVs. Nothing in the WhatsApp pipeline writes here — that side has
- * its own tables, and keeping the two apart is the point of this one.
+ * Uploaded CVs and hand-entered candidates. Nothing in the WhatsApp pipeline
+ * writes here — that side has its own tables, and keeping the two apart is the
+ * point of this one.
  */
 
+// file_data and raw_text are deliberately absent: one is the whole document
+// and the other is megabytes of bytes, and a list of 200 candidates would
+// carry both on every row. `has_file` is the part a list actually needs —
+// whether there is something to open.
 const FIELDS = `
-  id, external_id, file_name, file_size, mime_type,
-  name, email, phone, current_company, current_designation, location,
-  age, qualifications, experience_years,
-  extraction_model, extraction_version, extraction_notes,
-  uploaded_by, created_at, updated_at`;
+  c.id, c.external_id, c.file_name, c.file_size, c.mime_type,
+  c.name, c.email, c.phone, c.current_company, c.current_designation, c.location,
+  c.age, c.qualifications, c.experience_years,
+  c.extraction_model, c.extraction_version, c.extraction_notes,
+  c.entry_mode, (c.file_data IS NOT NULL) AS has_file,
+  c.uploaded_by, c.created_at, c.updated_at`;
+
+/**
+ * The notes on a candidate, folded into one cell for the spreadsheet export.
+ *
+ * Dated and one per line, because a note without its date is a claim with no
+ * shelf life — "wants 20% more" reads very differently a year on. The line
+ * breaks survive the CSV writer, which quotes any cell containing them.
+ */
+const NOTES_AGGREGATE = `
+  (SELECT string_agg(
+            to_char(n.created_at, 'YYYY-MM-DD') ||
+            CASE WHEN COALESCE(n.author, '') = '' THEN '' ELSE ' ' || n.author END ||
+            ': ' || n.body,
+            chr(10) ORDER BY n.created_at)
+     FROM candidate_notes n WHERE n.candidate_id = c.id) AS notes`;
+
+const NOTE_COUNT = `
+  (SELECT COUNT(*)::int FROM candidate_notes n WHERE n.candidate_id = c.id) AS note_count`;
+
+const WHERE_FILTERS = `
+  ($1::text IS NULL OR (
+     c.name                ILIKE '%' || $1 || '%' OR
+     c.current_company     ILIKE '%' || $1 || '%' OR
+     c.current_designation ILIKE '%' || $1 || '%' OR
+     c.location            ILIKE '%' || $1 || '%' OR
+     c.email               ILIKE '%' || $1 || '%' OR
+     c.phone               ILIKE '%' || $1 || '%'
+   ))
+   AND ($2::numeric IS NULL OR c.experience_years >= $2)`;
 
 async function create(fields, client) {
   const run = client ? client.query.bind(client) : query;
   const { rows } = await run(
     `INSERT INTO candidates
-       (external_id, file_name, file_size, mime_type, raw_text,
+       (external_id, file_name, file_size, mime_type, raw_text, file_data,
         name, email, phone, current_company, current_designation, location,
         age, qualifications, experience_years,
-        extraction_model, extraction_version, extraction_notes, uploaded_by)
-     VALUES ('pending',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-     RETURNING *`,
+        extraction_model, extraction_version, extraction_notes,
+        entry_mode, uploaded_by)
+     VALUES ('pending',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+     RETURNING id`,
     [
       fields.fileName || null,
       fields.fileSize || null,
       fields.mimeType || null,
-      fields.rawText,
+      fields.rawText || '',
+      fields.fileData || null,
       fields.name || null,
       fields.email || null,
       fields.phone || null,
@@ -41,13 +78,15 @@ async function create(fields, client) {
       fields.extractionModel || null,
       fields.extractionVersion || null,
       fields.extractionNotes || null,
+      fields.entryMode === 'manual' ? 'manual' : 'upload',
       fields.uploadedBy || null,
     ]
   );
   // Derived from the serial id, as JDs are, so the identifier is stable and
   // readable in an exported spreadsheet.
   const { rows: updated } = await run(
-    `UPDATE candidates SET external_id = 'CAND_' || (1000 + id) WHERE id = $1 RETURNING *`,
+    `UPDATE candidates c SET external_id = 'CAND_' || (1000 + c.id) WHERE c.id = $1
+      RETURNING ${FIELDS}`,
     [rows[0].id]
   );
   return updated[0];
@@ -57,21 +96,15 @@ async function create(fields, client) {
  * @param {object} opts
  * @param {string} [opts.search]  matches name, company, designation, location
  * @param {number} [opts.minExperience]
+ * @param {boolean} [opts.withNotes]  fold every note into one column
  */
-async function list({ search, minExperience, limit = 200, offset = 0 } = {}) {
+async function list({ search, minExperience, withNotes = false, limit = 200, offset = 0 } = {}) {
   const { rows } = await query(
-    `SELECT ${FIELDS}
-       FROM candidates
-      WHERE ($1::text IS NULL OR (
-              name                ILIKE '%' || $1 || '%' OR
-              current_company     ILIKE '%' || $1 || '%' OR
-              current_designation ILIKE '%' || $1 || '%' OR
-              location            ILIKE '%' || $1 || '%' OR
-              email               ILIKE '%' || $1 || '%' OR
-              phone               ILIKE '%' || $1 || '%'
-            ))
-        AND ($2::numeric IS NULL OR experience_years >= $2)
-      ORDER BY created_at DESC
+    `SELECT ${FIELDS},
+            ${withNotes ? NOTES_AGGREGATE : NOTE_COUNT}
+       FROM candidates c
+      WHERE ${WHERE_FILTERS}
+      ORDER BY c.created_at DESC
       LIMIT $3 OFFSET $4`,
     [search || null, minExperience ?? null, limit, offset]
   );
@@ -80,17 +113,7 @@ async function list({ search, minExperience, limit = 200, offset = 0 } = {}) {
 
 async function count({ search, minExperience } = {}) {
   const { rows } = await query(
-    `SELECT COUNT(*)::int AS count
-       FROM candidates
-      WHERE ($1::text IS NULL OR (
-              name                ILIKE '%' || $1 || '%' OR
-              current_company     ILIKE '%' || $1 || '%' OR
-              current_designation ILIKE '%' || $1 || '%' OR
-              location            ILIKE '%' || $1 || '%' OR
-              email               ILIKE '%' || $1 || '%' OR
-              phone               ILIKE '%' || $1 || '%'
-            ))
-        AND ($2::numeric IS NULL OR experience_years >= $2)`,
+    `SELECT COUNT(*)::int AS count FROM candidates c WHERE ${WHERE_FILTERS}`,
     [search || null, minExperience ?? null]
   );
   return rows[0].count;
@@ -98,15 +121,36 @@ async function count({ search, minExperience } = {}) {
 
 async function findByExternalId(externalId) {
   const { rows } = await query(
-    `SELECT ${FIELDS}, raw_text FROM candidates WHERE external_id = $1`,
+    `SELECT ${FIELDS}, c.raw_text FROM candidates c WHERE c.external_id = $1`,
     [externalId]
   );
   return rows[0] || null;
 }
 
 async function findById(id) {
-  const { rows } = await query(`SELECT ${FIELDS}, raw_text FROM candidates WHERE id = $1`, [id]);
+  const { rows } = await query(
+    `SELECT ${FIELDS}, c.raw_text FROM candidates c WHERE c.id = $1`,
+    [id]
+  );
   return rows[0] || null;
+}
+
+/**
+ * The stored document itself.
+ *
+ * Its own query rather than a column on the reads above: this is the one place
+ * that wants the bytes, and every other caller would be paying to carry a 15MB
+ * buffer it immediately discards.
+ */
+async function fileFor(externalId) {
+  const { rows } = await query(
+    `SELECT file_name, mime_type, file_size, file_data
+       FROM candidates WHERE external_id = $1`,
+    [externalId]
+  );
+  const row = rows[0];
+  if (!row || !row.file_data) return null;
+  return row;
 }
 
 /** Corrects a field the extraction got wrong. Recruiters will always need this. */
@@ -133,8 +177,8 @@ async function update(externalId, fields) {
   if (sets.length === 0) return findByExternalId(externalId);
 
   const { rows } = await query(
-    `UPDATE candidates SET ${sets.join(', ')}, updated_at = now()
-      WHERE external_id = $1
+    `UPDATE candidates c SET ${sets.join(', ')}, updated_at = now()
+      WHERE c.external_id = $1
       RETURNING ${FIELDS}`,
     values
   );
@@ -149,4 +193,54 @@ async function remove(externalId) {
   return rows[0] || null;
 }
 
-module.exports = { create, list, count, findByExternalId, findById, update, remove };
+// --------------------------------------------------------------------------
+// Notes
+// --------------------------------------------------------------------------
+
+/** Oldest first: notes are a running account, and it reads forwards. */
+async function listNotes(candidateId) {
+  const { rows } = await query(
+    `SELECT id, body, author, created_at, updated_at
+       FROM candidate_notes WHERE candidate_id = $1 ORDER BY created_at`,
+    [candidateId]
+  );
+  return rows;
+}
+
+async function addNote(candidateId, { body, author }) {
+  const { rows } = await query(
+    `INSERT INTO candidate_notes (candidate_id, body, author)
+     VALUES ($1,$2,$3)
+     RETURNING id, body, author, created_at, updated_at`,
+    [candidateId, body, author || null]
+  );
+  return rows[0];
+}
+
+/**
+ * Scoped to the candidate, not looked up by note id alone. The id comes from a
+ * URL, and without the scope a note could be edited through any candidate's
+ * page — including one whose notes the caller was never shown.
+ */
+async function updateNote(candidateId, noteId, { body }) {
+  const { rows } = await query(
+    `UPDATE candidate_notes SET body = $3, updated_at = now()
+      WHERE id = $2 AND candidate_id = $1
+      RETURNING id, body, author, created_at, updated_at`,
+    [candidateId, noteId, body]
+  );
+  return rows[0] || null;
+}
+
+async function removeNote(candidateId, noteId) {
+  const { rows } = await query(
+    'DELETE FROM candidate_notes WHERE id = $2 AND candidate_id = $1 RETURNING id',
+    [candidateId, noteId]
+  );
+  return rows[0] || null;
+}
+
+module.exports = {
+  create, list, count, findByExternalId, findById, fileFor, update, remove,
+  listNotes, addNote, updateNote, removeNote,
+};

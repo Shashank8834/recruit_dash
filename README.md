@@ -173,8 +173,9 @@ drawn from your actual traffic is worth far more than any prompt tweak made blin
 | `LLM_MAX_TPM` | 6000 on Groq, off on Gemini | You are off the free tier. On Groq this is the ceiling that actually binds |
 | `ROUTER_TEXT_CHARS` | 3000 | Stage 1 is miscategorising messages whose nature only becomes clear late |
 
-The dashboard's **Pipeline** panel (chats mid-batch / unclassified / failed / sheet
-backlog) is the fastest way to spot a stuck worker or a failing sheet sync.
+The **Ingest** panel at the foot of *WhatsApp messages* (chats mid-batch /
+unclassified / failed / sheet backlog) is the fastest way to spot a stuck worker
+or a failing sheet sync.
 
 ## Choosing a model provider
 
@@ -249,3 +250,27 @@ nothing downstream.
 | `POST /api/review/submissions/:id/reclassify` | Re-run current prompts on one submission |
 | `POST /api/sheets/sync` | Force a sheet mirror rewrite |
 | `GET /api/health` | Liveness + DB status |
+
+The endpoints above serve the WhatsApp side. The side a recruiter curates is
+backed by its own tables and its own routes, and the two never share either:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/dashboard/managed` | Overview of roles by stage and the talent pool |
+| `POST /api/candidates` | Upload one or more CVs (multipart, field `files`) |
+| `POST /api/candidates/manual` | Enter a candidate by hand; only `name` is required |
+| `GET /api/candidates`, `GET /api/candidates/:id` | The talent pool; detail includes notes and the CV text |
+| `GET /api/candidates/:id/file` | The stored CV — inline for PDFs, `?download=1` to save |
+| `PATCH /api/candidates/:id`, `DELETE /api/candidates/:id` | Correct an extracted field, or remove the candidate |
+| `GET/POST /api/candidates/:id/notes` | Notes on a candidate, oldest first |
+| `PATCH/DELETE /api/candidates/:id/notes/:noteId` | Edit or remove one note |
+| `GET /api/candidates/export.csv` | The pool as a spreadsheet, notes included |
+| `GET /api/roles/stages` | The stages a role can sit at, in order |
+| `GET/POST /api/roles`, `GET /api/roles/:id` | Hand-written roles; `?status=` filters by stage |
+| `PATCH /api/roles/:id`, `DELETE /api/roles/:id` | Edit a role, move its stage, or delete it |
+| `POST /api/roles/:id/suggest` | Score candidates against the role; `?pool=manual` for the talent pool only |
+| `GET /api/roles/:id/export.csv` | The suggested matches as a spreadsheet |
+
+A role moves through **open → reviewing → placed → closed**. Uploaded CVs are
+kept as files as well as text, so a profile can be checked against the original
+document; a candidate entered by hand has no file and says so.

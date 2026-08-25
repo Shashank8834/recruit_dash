@@ -1,11 +1,9 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
-import JDList from './pages/JDList';
+import WhatsApp from './pages/WhatsApp';
 import JDDetail from './pages/JDDetail';
-import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
-import Review from './pages/Review';
 // The manual side. Separate routes and separate pages from the WhatsApp
 // screens above, because the data behind them is separate too.
 import TalentPool from './pages/TalentPool';
@@ -19,11 +17,19 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/jds" element={<JDList />} />
+
+        {/* The WhatsApp side is one destination with three tabs. The detail
+            pages stay on their own paths — a single candidate is not a tab. */}
+        <Route path="/whatsapp" element={<WhatsApp />} />
         <Route path="/jds/:id" element={<JDDetail />} />
-        <Route path="/candidates" element={<CandidateList />} />
         <Route path="/candidates/:id" element={<CandidateDetail />} />
-        <Route path="/review" element={<Review />} />
+
+        {/* The old list paths still resolve. Links to them exist in bookmarks
+            and in the detail pages' own "back" navigation, and a dead route
+            would strand both. */}
+        <Route path="/jds" element={<Navigate to="/whatsapp?tab=messages" replace />} />
+        <Route path="/candidates" element={<Navigate to="/whatsapp?tab=applicants" replace />} />
+        <Route path="/review" element={<Navigate to="/whatsapp?tab=review" replace />} />
 
         <Route path="/talent" element={<TalentPool />} />
         <Route path="/talent/:id" element={<TalentDetail />} />

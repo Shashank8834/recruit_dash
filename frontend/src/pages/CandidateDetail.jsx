@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
+import Notes from '../components/Notes';
 import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
 
@@ -170,6 +171,15 @@ export default function CandidateDetail() {
           </details>
         )}
       </section>
+
+      {/* Notes follow the person, not this verdict, so anything recorded here
+          is on the page again the next time they apply to something else. */}
+      <Notes
+        basePath={`/api/applicants/${id}`}
+        notes={applicant.notes || []}
+        onChange={(notes) => setApplicant((current) => ({ ...current, notes }))}
+        placeholder="Called — already placed elsewhere, asked us to keep them on file."
+      />
 
       {/* Assessment */}
       <section className="space-y-5">

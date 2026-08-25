@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const notesRepo = require('./notes');
 
 /**
  * Roles a recruiter writes by hand, kept separate from `jds`, which holds what
@@ -44,7 +45,8 @@ async function list({ status } = {}) {
     `SELECT j.*,
             (SELECT COUNT(*)::int FROM job_match_suggestions s
               WHERE s.manual_job_id = j.id AND s.verdict IN ('STRONG','PARTIAL')
-            ) AS match_count
+            ) AS match_count,
+            ${notesRepo.countSubquery('role', 'j')} AS note_count
        FROM manual_jobs j
       WHERE ($1::text IS NULL OR j.status = $1)
       -- Stage first, newest within it. Sorted by date alone, a role closed
@@ -174,7 +176,13 @@ async function suggestionsFor(manualJobId) {
             COALESCE(c.email, ct.email)                       AS email,
             COALESCE(c.phone, ct.phone)                       AS phone,
             c.current_company, c.current_designation, c.location,
-            c.experience_years
+            c.experience_years,
+            -- Whichever pool this suggestion came from, its notes come with
+            -- it: a candidate's notes hang off the candidate, a WhatsApp
+            -- applicant's off the contact. COALESCE because exactly one of
+            -- the two joins produced a row.
+            COALESCE(${notesRepo.aggregate('candidate', 'c')},
+                     ${notesRepo.aggregate('applicant', 'ct')}) AS notes
        FROM job_match_suggestions s
        LEFT JOIN candidates c   ON c.id = s.candidate_id
        LEFT JOIN submissions sub ON sub.id = s.submission_id

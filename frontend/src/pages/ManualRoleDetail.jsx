@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
+import Notes from '../components/Notes';
 import { STAGES, StageTag } from '../components/RoleStage';
 import { formatDate } from '../lib/utils';
 
@@ -310,6 +311,13 @@ export default function ManualRoleDetail() {
           )}
         </section>
       )}
+
+      <Notes
+        basePath={`/api/roles/${id}`}
+        notes={role.notes || []}
+        onChange={(notes) => setRole((current) => ({ ...current, notes }))}
+        placeholder="Client wants someone who can start within a month; band raised to 30 LPA."
+      />
 
       {note && <div className="callout">{note}</div>}
 

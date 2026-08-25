@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
+import Notes from '../components/Notes';
 import { formatDate } from '../lib/utils';
 
 export default function JDDetail() {
@@ -120,6 +121,13 @@ export default function JDDetail() {
           {jd.JD_Text || 'No description text available.'}
         </pre>
       </section>
+
+      <Notes
+        basePath={`/api/jds/${id}`}
+        notes={jd.notes || []}
+        onChange={(notes) => setJd((current) => ({ ...current, notes }))}
+        placeholder="Asked the poster for the budget — no reply yet. Treating as stale."
+      />
 
       <section className="space-y-4">
         <div className="flex items-baseline justify-between border-b border-rule pb-2">

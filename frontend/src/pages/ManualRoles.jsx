@@ -181,6 +181,7 @@ export default function ManualRoles() {
                 <th className="th">Location</th>
                 <th className="th">Min experience</th>
                 <th className="th">Matches</th>
+                <th className="th">Notes</th>
                 <th className="th">Created</th>
               </tr>
             </thead>
@@ -198,6 +199,7 @@ export default function ManualRoles() {
                     {role.min_experience_years === null ? '—' : `${role.min_experience_years} yr`}
                   </td>
                   <td className="td tnum">{role.match_count || 0}</td>
+                  <td className="td tnum text-xs text-ink-2">{role.note_count || '—'}</td>
                   <td className="td text-xs text-ink-2">{formatDate(role.created_at)}</td>
                 </tr>
               ))}

@@ -6,6 +6,8 @@ const candidatesRepo = require('../repo/candidates');
 const media = require('../services/media');
 const cvExtractor = require('../services/cvExtractor');
 const { toCsv, filename } = require('../csv');
+const notesRepo = require('../repo/notes');
+const { notesRouter } = require('./notes');
 
 /**
  * Manually uploaded CVs and hand-entered candidates.
@@ -175,7 +177,7 @@ router.post('/manual', async (req, res) => {
     // needing a second trip to the detail page.
     const firstNote = text(body.note);
     if (firstNote) {
-      await candidatesRepo.addNote(candidate.id, {
+      await notesRepo.add('candidate', candidate.id, {
         body: firstNote,
         author: text(body.uploadedBy),
       });
@@ -223,7 +225,7 @@ router.get('/:id', async (req, res) => {
   try {
     const candidate = await candidatesRepo.findByExternalId(req.params.id);
     if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
-    res.json({ ...candidate, notes: await candidatesRepo.listNotes(candidate.id) });
+    res.json({ ...candidate, notes: await notesRepo.list('candidate', candidate.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -301,83 +303,10 @@ router.delete('/:id', async (req, res) => {
 // --------------------------------------------------------------------------
 // Notes
 // --------------------------------------------------------------------------
-// Addressed through the candidate rather than by note id alone. The id is in a
-// URL, and a bare /api/notes/:id would let any note be edited from any page.
-
-async function resolveCandidate(req, res) {
-  const candidate = await candidatesRepo.findByExternalId(req.params.id);
-  if (!candidate) {
-    res.status(404).json({ error: 'Candidate not found' });
-    return null;
-  }
-  return candidate;
-}
-
-router.get('/:id/notes', async (req, res) => {
-  try {
-    const candidate = await resolveCandidate(req, res);
-    if (!candidate) return;
-    res.json(await candidatesRepo.listNotes(candidate.id));
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/:id/notes', async (req, res) => {
-  try {
-    const body = text((req.body || {}).body);
-    if (!body) return res.status(400).json({ error: 'A note cannot be empty.' });
-
-    const candidate = await resolveCandidate(req, res);
-    if (!candidate) return;
-    res.status(201).json(
-      await candidatesRepo.addNote(candidate.id, {
-        body,
-        author: text((req.body || {}).author),
-      })
-    );
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.patch('/:id/notes/:noteId', async (req, res) => {
-  try {
-    const body = text((req.body || {}).body);
-    if (!body) return res.status(400).json({ error: 'A note cannot be empty.' });
-
-    const candidate = await resolveCandidate(req, res);
-    if (!candidate) return;
-    const updated = await candidatesRepo.updateNote(
-      candidate.id,
-      parseInt(req.params.noteId, 10),
-      { body }
-    );
-    if (!updated) return res.status(404).json({ error: 'Note not found' });
-    res.json(updated);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.delete('/:id/notes/:noteId', async (req, res) => {
-  try {
-    const candidate = await resolveCandidate(req, res);
-    if (!candidate) return;
-    const removed = await candidatesRepo.removeNote(
-      candidate.id,
-      parseInt(req.params.noteId, 10)
-    );
-    if (!removed) return res.status(404).json({ error: 'Note not found' });
-    res.json({ deleted: removed.id });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
+// Mounted from the shared router rather than written out here. The handlers
+// are the same on every record that carries notes; the only thing specific to
+// candidates is how an external id becomes an internal one.
+router.use('/:id/notes', notesRouter('candidate', (id) => candidatesRepo.findByExternalId(id)));
 
 // Multer reports an oversized file as an error object, not an exception the
 // route can catch — without this the client sees an opaque 500.

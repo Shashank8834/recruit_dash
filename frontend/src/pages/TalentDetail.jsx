@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { formatDate, formatDateTime } from '../lib/utils';
+import Notes from '../components/Notes';
+import { formatDate } from '../lib/utils';
 
 /**
  * One candidate, with their extracted fields editable and their notes beside
@@ -23,155 +24,6 @@ const FIELDS = [
   { key: 'age', label: 'Age', type: 'number' },
   { key: 'experienceYears', column: 'experience_years', label: 'Total experience (years)', type: 'number' },
 ];
-
-/**
- * Notes on a candidate, oldest first.
- *
- * The fields above hold what a CV states; this holds what someone learned.
- * "Wants to stay in Pune", "was cold on the salary" — the things that decide
- * whether a strong-on-paper match is worth a call, and that no extraction can
- * produce. Each note keeps its own date because a note without one is a claim
- * with no shelf life.
- */
-function Notes({ candidateId, notes, onChange }) {
-  const [draft, setDraft] = useState('');
-  const [author, setAuthor] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [editingId, setEditingId] = useState(null);
-  const [editBody, setEditBody] = useState('');
-
-  async function send(url, options) {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(url, options);
-      if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
-      }
-      // Re-read rather than patching local state: the list is small and the
-      // server owns the ordering and the timestamps.
-      const fresh = await fetch(`/api/candidates/${candidateId}/notes`).then((r) => r.json());
-      onChange(fresh);
-      return true;
-    } catch (e) {
-      setError(e.message);
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function add(event) {
-    event.preventDefault();
-    if (!draft.trim()) return;
-    const ok = await send(`/api/candidates/${candidateId}/notes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: draft, author: author.trim() || null }),
-    });
-    if (ok) setDraft('');
-  }
-
-  async function saveEdit(noteId) {
-    if (!editBody.trim()) return;
-    const ok = await send(`/api/candidates/${candidateId}/notes/${noteId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: editBody }),
-    });
-    if (ok) setEditingId(null);
-  }
-
-  async function remove(noteId) {
-    if (!window.confirm('Delete this note?')) return;
-    await send(`/api/candidates/${candidateId}/notes/${noteId}`, { method: 'DELETE' });
-  }
-
-  return (
-    <section className="space-y-4">
-      <div className="flex items-end justify-between border-b border-ink pb-2">
-        <p className="micro">Notes</p>
-        <p className="tnum text-sm text-ink-2">{notes.length}</p>
-      </div>
-
-      {error && <div className="notice-error">{error}</div>}
-
-      {notes.length === 0 ? (
-        <p className="text-sm text-ink-3">
-          Nothing recorded yet. Notes are carried into the spreadsheet export.
-        </p>
-      ) : (
-        <ul className="space-y-3">
-          {notes.map((note) => (
-            <li key={note.id} className="border border-rule bg-surface px-4 py-3">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="mono">
-                  {formatDateTime(note.created_at)}
-                  {note.author ? ` · ${note.author}` : ''}
-                  {note.updated_at !== note.created_at ? ' · edited' : ''}
-                </p>
-                <div className="flex gap-3">
-                  <button
-                    className="btn-quiet text-xs"
-                    disabled={busy}
-                    onClick={() => {
-                      setEditingId(editingId === note.id ? null : note.id);
-                      setEditBody(note.body);
-                    }}
-                  >
-                    {editingId === note.id ? 'Cancel' : 'Edit'}
-                  </button>
-                  <button className="btn-quiet text-xs" disabled={busy} onClick={() => remove(note.id)}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              {editingId === note.id ? (
-                <div className="mt-3 space-y-2">
-                  <textarea
-                    className="input h-24 w-full"
-                    value={editBody}
-                    onChange={(e) => setEditBody(e.target.value)}
-                  />
-                  <button className="btn-solid" disabled={busy} onClick={() => saveEdit(note.id)}>
-                    {busy ? 'Saving…' : 'Save note'}
-                  </button>
-                </div>
-              ) : (
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                  {note.body}
-                </p>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <form onSubmit={add} className="space-y-3 border border-rule px-4 py-4">
-        <textarea
-          className="input h-24 w-full"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Spoke today — 60 days' notice, wants a hybrid role in Chennai."
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            className="input w-48"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder="Your name (optional)"
-          />
-          <button className="btn-solid" type="submit" disabled={busy || !draft.trim()}>
-            {busy ? 'Saving…' : 'Add note'}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
-}
 
 export default function TalentDetail() {
   const { id } = useParams();
@@ -337,7 +189,12 @@ export default function TalentDetail() {
         )}
       </section>
 
-      <Notes candidateId={id} notes={notes} onChange={setNotes} />
+      <Notes
+        basePath={`/api/candidates/${id}`}
+        notes={notes}
+        onChange={setNotes}
+        placeholder="Spoke today — 60 days' notice, wants a hybrid role in Chennai."
+      />
 
       {candidate.raw_text && (
         <section className="space-y-3">

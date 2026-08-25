@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const notesRepo = require('./notes');
 
 /**
  * Uploaded CVs and hand-entered candidates. Nothing in the WhatsApp pipeline
@@ -18,23 +19,11 @@ const FIELDS = `
   c.entry_mode, (c.file_data IS NOT NULL) AS has_file,
   c.uploaded_by, c.created_at, c.updated_at`;
 
-/**
- * The notes on a candidate, folded into one cell for the spreadsheet export.
- *
- * Dated and one per line, because a note without its date is a claim with no
- * shelf life — "wants 20% more" reads very differently a year on. The line
- * breaks survive the CSV writer, which quotes any cell containing them.
- */
-const NOTES_AGGREGATE = `
-  (SELECT string_agg(
-            to_char(n.created_at, 'YYYY-MM-DD') ||
-            CASE WHEN COALESCE(n.author, '') = '' THEN '' ELSE ' ' || n.author END ||
-            ': ' || n.body,
-            chr(10) ORDER BY n.created_at)
-     FROM candidate_notes n WHERE n.candidate_id = c.id) AS notes`;
-
-const NOTE_COUNT = `
-  (SELECT COUNT(*)::int FROM candidate_notes n WHERE n.candidate_id = c.id) AS note_count`;
+// Notes live in one table shared by every record that carries them, so the
+// fragments that fold them into a column come from there rather than being
+// spelled out again here.
+const NOTES_AGGREGATE = `${notesRepo.aggregate('candidate', 'c')} AS notes`;
+const NOTE_COUNT = `${notesRepo.countSubquery('candidate', 'c')} AS note_count`;
 
 const WHERE_FILTERS = `
   ($1::text IS NULL OR (
@@ -193,54 +182,6 @@ async function remove(externalId) {
   return rows[0] || null;
 }
 
-// --------------------------------------------------------------------------
-// Notes
-// --------------------------------------------------------------------------
-
-/** Oldest first: notes are a running account, and it reads forwards. */
-async function listNotes(candidateId) {
-  const { rows } = await query(
-    `SELECT id, body, author, created_at, updated_at
-       FROM candidate_notes WHERE candidate_id = $1 ORDER BY created_at`,
-    [candidateId]
-  );
-  return rows;
-}
-
-async function addNote(candidateId, { body, author }) {
-  const { rows } = await query(
-    `INSERT INTO candidate_notes (candidate_id, body, author)
-     VALUES ($1,$2,$3)
-     RETURNING id, body, author, created_at, updated_at`,
-    [candidateId, body, author || null]
-  );
-  return rows[0];
-}
-
-/**
- * Scoped to the candidate, not looked up by note id alone. The id comes from a
- * URL, and without the scope a note could be edited through any candidate's
- * page — including one whose notes the caller was never shown.
- */
-async function updateNote(candidateId, noteId, { body }) {
-  const { rows } = await query(
-    `UPDATE candidate_notes SET body = $3, updated_at = now()
-      WHERE id = $2 AND candidate_id = $1
-      RETURNING id, body, author, created_at, updated_at`,
-    [candidateId, noteId, body]
-  );
-  return rows[0] || null;
-}
-
-async function removeNote(candidateId, noteId) {
-  const { rows } = await query(
-    'DELETE FROM candidate_notes WHERE id = $2 AND candidate_id = $1 RETURNING id',
-    [candidateId, noteId]
-  );
-  return rows[0] || null;
-}
-
 module.exports = {
   create, list, count, findByExternalId, findById, fileFor, update, remove,
-  listNotes, addNote, updateNote, removeNote,
 };

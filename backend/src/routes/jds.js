@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const notesRepo = require('../repo/notes');
+const { notesRouter } = require('./notes');
 const jdsRepo = require('../repo/jds');
 const applicantsRepo = require('../repo/applicants');
 const sheetMirror = require('../services/sheetMirror');
@@ -24,8 +26,11 @@ router.get('/:id', async (req, res) => {
     const jd = await jdsRepo.findByExternalId(req.params.id);
     if (!jd) return res.status(404).json({ error: 'JD not found' });
 
-    const matched = await applicantsRepo.listForJd(jd.id);
-    res.json({ ...serialize.jd(jd), applicants: matched.map(serialize.applicant) });
+    const [matched, notes] = await Promise.all([
+      applicantsRepo.listForJd(jd.id),
+      notesRepo.list('posting', jd.id),
+    ]);
+    res.json({ ...serialize.jd(jd), applicants: matched.map(serialize.applicant), notes });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -59,5 +64,9 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Notes on a posting — what the poster clarified when asked, whether it is
+// still live. Mounted from the shared router; only the id lookup differs.
+router.use('/:id/notes', notesRouter('posting', (id) => jdsRepo.findByExternalId(id)));
 
 module.exports = router;

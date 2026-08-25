@@ -4,6 +4,8 @@ const router = express.Router();
 const manualJobsRepo = require('../repo/manualJobs');
 const talentMatch = require('../services/talentMatch');
 const { toCsv, filename } = require('../csv');
+const notesRepo = require('../repo/notes');
+const { notesRouter } = require('./notes');
 
 /**
  * Roles a recruiter writes by hand, and the candidate suggestions for them.
@@ -27,6 +29,10 @@ const SUGGEST_COLUMNS = [
   { key: 'verdict', label: 'Match' },
   { key: 'confidence', label: 'Confidence' },
   { key: 'reason', label: 'Reason' },
+  // The CANDIDATE's notes, not the role's. This sheet is a list of people to
+  // work through, and what someone recorded about them is the part a
+  // spreadsheet cannot reconstruct.
+  { key: 'notes', label: 'Candidate notes' },
 ];
 
 /** The stages a role can sit at, so the UI does not hard-code its own copy. */
@@ -59,8 +65,11 @@ router.get('/:id', async (req, res) => {
   try {
     const job = await manualJobsRepo.findByExternalId(req.params.id);
     if (!job) return res.status(404).json({ error: 'Role not found' });
-    const suggestions = await manualJobsRepo.suggestionsFor(job.id);
-    res.json({ ...job, suggestions });
+    const [suggestions, notes] = await Promise.all([
+      manualJobsRepo.suggestionsFor(job.id),
+      notesRepo.list('role', job.id),
+    ]);
+    res.json({ ...job, suggestions, notes });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -170,6 +179,10 @@ router.post('/:id/suggest', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Notes on the role — what was agreed with the client, why the brief changed.
+// Mounted from the shared router; only the id lookup is specific to roles.
+router.use('/:id/notes', notesRouter('role', (id) => manualJobsRepo.findByExternalId(id)));
 
 router.get('/:id/export.csv', async (req, res) => {
   try {

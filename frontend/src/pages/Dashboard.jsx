@@ -20,6 +20,25 @@ import { formatDate } from '../lib/utils';
  * offered as one figure among many rather than as a lens over all of them.
  */
 
+/**
+ * Where a note's subject lives, so a note is one click from the record it is
+ * about. Notes are written on four different screens; a feed that only shows
+ * the text turns every entry into a hunt for what it referred to.
+ */
+const NOTE_LINK = {
+  candidate: (ref) => `/talent/${ref}`,
+  role:      (ref) => `/roles/${ref}`,
+  posting:   (ref) => `/jds/${ref}`,
+  applicant: (ref) => `/candidates/${ref}`,
+};
+
+const NOTE_LABEL = {
+  candidate: 'Candidate',
+  role: 'Role',
+  posting: 'Posting',
+  applicant: 'Applicant',
+};
+
 /** Stage mix as a stacked ink bar, densest at the stage needing most attention. */
 function StageBar({ stages, total }) {
   if (!total) return <p className="text-sm text-ink-3">No roles yet.</p>;
@@ -147,6 +166,31 @@ export default function Dashboard() {
               ))}
             </div>
           </section>
+
+          {(stats.recentNotes || []).length > 0 && (
+            <section className="space-y-3">
+              <h2 className="micro border-b border-rule pb-2">Latest notes</h2>
+              <ul className="space-y-2">
+                {stats.recentNotes.map((note) => (
+                  <li key={note.id} className="border border-rule bg-surface px-4 py-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <Link
+                        to={NOTE_LINK[note.target](note.ref)}
+                        className="text-sm font-semibold text-ink hover:underline hover:underline-offset-4"
+                      >
+                        {note.subject || note.ref}
+                      </Link>
+                      <p className="mono">
+                        {NOTE_LABEL[note.target]} · {formatDate(note.created_at)}
+                        {note.author ? ` · ${note.author}` : ''}
+                      </p>
+                    </div>
+                    <p className="mt-1.5 line-clamp-2 text-sm text-ink-2">{note.body}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <div className="grid gap-8 lg:grid-cols-2">
             <section className="space-y-3">

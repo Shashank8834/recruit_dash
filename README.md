@@ -262,8 +262,6 @@ backed by its own tables and its own routes, and the two never share either:
 | `GET /api/candidates`, `GET /api/candidates/:id` | The talent pool; detail includes notes and the CV text |
 | `GET /api/candidates/:id/file` | The stored CV — inline for PDFs, `?download=1` to save |
 | `PATCH /api/candidates/:id`, `DELETE /api/candidates/:id` | Correct an extracted field, or remove the candidate |
-| `GET/POST /api/candidates/:id/notes` | Notes on a candidate, oldest first |
-| `PATCH/DELETE /api/candidates/:id/notes/:noteId` | Edit or remove one note |
 | `GET /api/candidates/export.csv` | The pool as a spreadsheet, notes included |
 | `GET /api/roles/stages` | The stages a role can sit at, in order |
 | `GET/POST /api/roles`, `GET /api/roles/:id` | Hand-written roles; `?status=` filters by stage |
@@ -274,3 +272,24 @@ backed by its own tables and its own routes, and the two never share either:
 A role moves through **open → reviewing → placed → closed**. Uploaded CVs are
 kept as files as well as text, so a profile can be checked against the original
 document; a candidate entered by hand has no file and says so.
+
+### Notes
+
+Every record a person looks at carries notes, on the same two paths:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET/POST /api/<thing>/:id/notes` | Read the notes, oldest first, or add one |
+| `PATCH/DELETE /api/<thing>/:id/notes/:noteId` | Edit or remove one note |
+
+where `<thing>` is `candidates`, `roles`, `jds` or `applicants`. They share one
+`notes` table with a foreign key per target and a CHECK that exactly one is set,
+so deleting a record takes its notes with it. Every write is scoped to its owner
+as well as the note id, so a note cannot be edited through a record it does not
+belong to. Notes reach the CSV exports as a single dated cell per record, and
+the Overview shows the latest few across all four.
+
+Applicant notes attach to the **contact**, not to the classification named in
+the URL: a classification is one verdict against one posting, while "called, not
+interested" is about the person. Anchored to the verdict it would be invisible
+the next time they applied to something else.

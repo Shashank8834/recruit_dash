@@ -23,7 +23,7 @@ const { dateRange } = require('../dateRange');
  */
 router.get('/managed', async (_req, res) => {
   try {
-    const [stages, talent, matches, recentRoles, recentCandidates] = await Promise.all([
+    const [stages, talent, matches, recentRoles, recentCandidates, recentNotes] = await Promise.all([
       manualJobsRepo.countsByStage(),
       query(
         `SELECT COUNT(*)::int                                            AS total,
@@ -32,8 +32,9 @@ router.get('/managed', async (_req, res) => {
                 COUNT(*) FILTER (WHERE file_data IS NOT NULL)::int       AS with_cv,
                 COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::int  AS added_7d,
                 COUNT(*) FILTER (WHERE created_at >= now() - interval '30 days')::int AS added_30d,
-                (SELECT COUNT(*)::int FROM candidate_notes)              AS notes,
-                (SELECT COUNT(DISTINCT candidate_id)::int FROM candidate_notes) AS with_notes
+                (SELECT COUNT(*)::int FROM notes WHERE candidate_id IS NOT NULL) AS notes,
+                (SELECT COUNT(DISTINCT candidate_id)::int FROM notes
+                  WHERE candidate_id IS NOT NULL)                        AS with_notes
            FROM candidates`
       ),
       query(
@@ -55,6 +56,41 @@ router.get('/managed', async (_req, res) => {
                 entry_mode, created_at
            FROM candidates ORDER BY created_at DESC LIMIT 5`
       ),
+      // The latest notes from anywhere, each labelled with what it is about and
+      // linkable back to it. Notes are written on four different screens now,
+      // and without one place that shows them together, a note is only ever
+      // read by whoever already knew to go looking for it.
+      query(
+        `SELECT n.id, n.body, n.author, n.created_at,
+                CASE
+                  WHEN n.candidate_id  IS NOT NULL THEN 'candidate'
+                  WHEN n.manual_job_id IS NOT NULL THEN 'role'
+                  WHEN n.jd_id         IS NOT NULL THEN 'posting'
+                  ELSE 'applicant'
+                END                                            AS target,
+                COALESCE(c.external_id, mj.external_id, j.external_id,
+                         'APP_' || cl.id)                      AS ref,
+                COALESCE(c.name, mj.title, j.title,
+                         ct.name, ct.push_name, ct.phone)      AS subject
+           FROM notes n
+           LEFT JOIN candidates c    ON c.id  = n.candidate_id
+           LEFT JOIN manual_jobs mj  ON mj.id = n.manual_job_id
+           LEFT JOIN jds j           ON j.id  = n.jd_id
+           LEFT JOIN contacts ct     ON ct.id = n.contact_id
+           -- One classification per contact, so an applicant note links to a
+           -- page that exists. LATERAL keeps it to one row: a person with
+           -- three applications must not appear as three notes.
+           LEFT JOIN LATERAL (
+             SELECT cl2.id
+               FROM classifications cl2
+               JOIN submissions s2 ON s2.id = cl2.submission_id
+              WHERE s2.contact_id = n.contact_id AND cl2.is_current
+              ORDER BY cl2.created_at DESC
+              LIMIT 1
+           ) cl ON n.contact_id IS NOT NULL
+          ORDER BY n.created_at DESC
+          LIMIT 8`
+      ),
     ]);
 
     const active = stages.open + stages.reviewing;
@@ -70,6 +106,7 @@ router.get('/managed', async (_req, res) => {
       matches: matches.rows[0],
       recentRoles: recentRoles.rows,
       recentCandidates: recentCandidates.rows,
+      recentNotes: recentNotes.rows,
     });
   } catch (err) {
     console.error(err);

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const notesRepo = require('../repo/notes');
+const meetingsRepo = require('../repo/meetings');
 const { notesRouter } = require('./notes');
 const applicantsRepo = require('../repo/applicants');
 const messagesRepo = require('../repo/messages');
@@ -33,18 +34,20 @@ router.get('/:id', async (req, res) => {
 
     // The message thread is the point of chaining — show what actually arrived,
     // in order, rather than only the joined block the classifier saw.
-    const [thread, history, allMatches, notes] = await Promise.all([
+    const [thread, history, allMatches, notes, meetings] = await Promise.all([
       messagesRepo.forSubmission(row.submission_id),
       classificationsRepo.history(row.submission_id),
       row.contact_id ? applicantsRepo.allForContact(row.contact_id) : [],
       // Notes hang off the person, not this verdict, so they show on every
       // application the same person makes.
       row.contact_id ? notesRepo.list('applicant', row.contact_id) : [],
+      row.contact_id ? meetingsRepo.list({ contactId: row.contact_id }) : [],
     ]);
 
     res.json({
       ...serialize.applicant(row),
       notes,
+      meetings,
       matches: allMatches.filter((m) => m.jd_id).map(serialize.match),
       thread: thread.map((m) => ({
         id: m.id,

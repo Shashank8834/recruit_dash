@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import Notes from '../components/Notes';
+import MeetingList from '../components/MeetingList';
 import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
 
@@ -172,8 +173,21 @@ export default function CandidateDetail() {
         )}
       </section>
 
-      {/* Notes follow the person, not this verdict, so anything recorded here
-          is on the page again the next time they apply to something else. */}
+      {/* Meetings and notes both follow the person, not this verdict, so
+          anything recorded here is on the page again the next time they apply
+          to something else. */}
+      <section className="space-y-3">
+        <div className="flex items-end justify-between border-b border-ink pb-2">
+          <p className="micro">Meetings</p>
+          <Link to="/meetings" className="btn-quiet text-xs">Book one</Link>
+        </div>
+        <MeetingList
+          meetings={applicant.meetings || []}
+          hidePerson
+          empty="No meetings with this person yet."
+        />
+      </section>
+
       <Notes
         basePath={`/api/applicants/${id}`}
         notes={applicant.notes || []}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import SummaryCard from '../components/SummaryCard';
 import { STAGES, stageLabel } from '../components/RoleStage';
+import MeetingList from '../components/MeetingList';
 import { formatDate } from '../lib/utils';
 
 /**
@@ -30,6 +31,7 @@ const NOTE_LINK = {
   role:      (ref) => `/roles/${ref}`,
   posting:   (ref) => `/jds/${ref}`,
   applicant: (ref) => `/candidates/${ref}`,
+  meeting:   (ref) => `/meetings/${ref}`,
 };
 
 const NOTE_LABEL = {
@@ -37,6 +39,7 @@ const NOTE_LABEL = {
   role: 'Role',
   posting: 'Posting',
   applicant: 'Applicant',
+  meeting: 'Meeting',
 };
 
 /** Stage mix as a stacked ink bar, densest at the stage needing most attention. */
@@ -120,11 +123,20 @@ export default function Dashboard() {
         </div>
       ) : stats ? (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SummaryCard
               label="Roles in play"
               value={stats.roles.active}
               hint={`${stats.roles.stages.placed} placed · ${stats.roles.stages.closed} closed`}
+            />
+            <SummaryCard
+              label="Meetings booked"
+              value={(stats.meetings || {}).upcoming || 0}
+              hint={
+                (stats.meetings || {}).overdue
+                  ? `${stats.meetings.overdue} past their date and never closed`
+                  : 'Nothing left unclosed'
+              }
             />
             <SummaryCard
               label="Talent pool"
@@ -138,6 +150,16 @@ export default function Dashboard() {
               hint={`${stats.matches.partial} partial, across ${stats.matches.total} suggestions`}
             />
           </div>
+
+          {(stats.upcomingMeetings || []).length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-baseline justify-between border-b border-rule pb-2">
+                <h2 className="micro">Next meetings</h2>
+                <Link to="/meetings" className="btn-quiet text-xs">All meetings</Link>
+              </div>
+              <MeetingList meetings={stats.upcomingMeetings} />
+            </section>
+          )}
 
           <section className="space-y-5">
             <div className="flex items-baseline justify-between border-b border-rule pb-2">

@@ -22,6 +22,7 @@ const TARGETS = {
   role:      { column: 'manual_job_id', label: 'Role' },
   posting:   { column: 'jd_id', label: 'Posting' },
   applicant: { column: 'contact_id', label: 'Applicant' },
+  meeting:   { column: 'meeting_id', label: 'Meeting' },
 };
 
 function columnFor(target) {

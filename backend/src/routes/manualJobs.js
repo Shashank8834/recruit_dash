@@ -5,6 +5,7 @@ const manualJobsRepo = require('../repo/manualJobs');
 const talentMatch = require('../services/talentMatch');
 const { toCsv, filename } = require('../csv');
 const notesRepo = require('../repo/notes');
+const meetingsRepo = require('../repo/meetings');
 const { notesRouter } = require('./notes');
 
 /**
@@ -65,11 +66,12 @@ router.get('/:id', async (req, res) => {
   try {
     const job = await manualJobsRepo.findByExternalId(req.params.id);
     if (!job) return res.status(404).json({ error: 'Role not found' });
-    const [suggestions, notes] = await Promise.all([
+    const [suggestions, notes, meetings] = await Promise.all([
       manualJobsRepo.suggestionsFor(job.id),
       notesRepo.list('role', job.id),
+      meetingsRepo.list({ manualJobId: job.id }),
     ]);
-    res.json({ ...job, suggestions, notes });
+    res.json({ ...job, suggestions, notes, meetings });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

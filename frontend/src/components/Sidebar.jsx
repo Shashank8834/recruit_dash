@@ -39,6 +39,16 @@ const groups = [
         ),
       },
       {
+        to: '/meetings',
+        label: 'Meetings',
+        badgeKey: 'meetings',
+        icon: (
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+            <path strokeLinecap="square" d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4" />
+          </svg>
+        ),
+      },
+      {
         to: '/talent',
         label: 'Talent pool',
         icon: (
@@ -68,16 +78,23 @@ const groups = [
 
 export default function Sidebar({ open, onClose, dark, onToggleDark }) {
   const [reviewCount, setReviewCount] = useState(0);
+  const [meetingCount, setMeetingCount] = useState(0);
 
-  // The queue only matters if you notice it filling up, so keep the count live.
+  // Both counts only matter if you notice them climbing, so keep them live.
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       try {
-        const r = await fetch('/api/review/count');
-        if (!r.ok) return;
-        const { count } = await r.json();
-        if (!cancelled) setReviewCount(count);
+        const [review, meetings] = await Promise.all([
+          fetch('/api/review/count').then((r) => (r.ok ? r.json() : null)),
+          fetch('/api/meetings/summary').then((r) => (r.ok ? r.json() : null)),
+        ]);
+        if (cancelled) return;
+        if (review) setReviewCount(review.count);
+        // Meetings whose date has passed and were never closed. Not the count
+        // of upcoming ones: a badge should mean "something is waiting for
+        // you", and a meeting next Tuesday is not.
+        if (meetings) setMeetingCount(meetings.overdue);
       } catch {
         // A transient fetch failure shouldn't surface in the nav.
       }
@@ -87,7 +104,7 @@ export default function Sidebar({ open, onClose, dark, onToggleDark }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
-  const badges = { review: reviewCount };
+  const badges = { review: reviewCount, meetings: meetingCount };
 
   return (
     <aside

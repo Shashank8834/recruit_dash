@@ -70,3 +70,38 @@ test('normalising does not merge two different candidates', () => {
   assert.notEqual(normaliseRef('CAND_1001'), normaliseRef('CAND_1002'));
   assert.notEqual(normaliseRef('CAND_1001'), normaliseRef('WA_1001'));
 });
+
+/**
+ * The shortlist SQL, checked for shape rather than run.
+ *
+ * Suggesting matches across both pools raised "invalid reference to
+ * FROM-clause entry for table s" on every call, because the WhatsApp half was
+ * written with a comma before a LEFT JOIN. Comma binds looser than JOIN, so
+ * Postgres read "FROM submissions s, q LEFT JOIN contacts ct ON ..." as
+ * "submissions s, (q LEFT JOIN contacts ct ON ...)" and s was not in scope in
+ * the ON clause.
+ *
+ * It failed only on the default path — "talent pool only" never runs this half
+ * — so the button most people press was the broken one, and it took a live
+ * database to notice. This pins the join order, which is the part a later edit
+ * could quietly undo.
+ */
+test('the shortlist never comma-joins a CTE ahead of an explicit JOIN', () => {
+  const source = require('node:fs').readFileSync(
+    require.resolve('../src/services/talentMatch.js'), 'utf8'
+  );
+
+  // Comments are stripped before matching: the explanation beside the fix
+  // quotes the broken form, and a test that reads its own documentation as
+  // code is worse than no test.
+  const sql = source.replace(/--[^\n]*/g, '').replace(/\/\/[^\n]*/g, '');
+
+  assert.ok(
+    /FROM submissions s\s+LEFT JOIN contacts ct[\s\S]*?CROSS JOIN q/.test(sql),
+    'submissions must join contacts directly, with the CTE cross-joined after'
+  );
+  assert.ok(
+    !/FROM\s+\w+\s+\w+,\s*q\s+LEFT JOIN/.test(sql),
+    'a comma before a LEFT JOIN puts the preceding alias out of scope in its ON clause'
+  );
+});

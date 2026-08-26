@@ -10,6 +10,8 @@ import TalentPool from './pages/TalentPool';
 import TalentDetail from './pages/TalentDetail';
 import ManualRoles from './pages/ManualRoles';
 import ManualRoleDetail from './pages/ManualRoleDetail';
+import Meetings from './pages/Meetings';
+import MeetingDetail from './pages/MeetingDetail';
 
 export default function App() {
   return (
@@ -35,6 +37,8 @@ export default function App() {
         <Route path="/talent/:id" element={<TalentDetail />} />
         <Route path="/roles" element={<ManualRoles />} />
         <Route path="/roles/:id" element={<ManualRoleDetail />} />
+        <Route path="/meetings" element={<Meetings />} />
+        <Route path="/meetings/:id" element={<MeetingDetail />} />
       </Routes>
     </Layout>
   );

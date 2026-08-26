@@ -52,3 +52,54 @@ test('an empty extraction yields all nulls rather than throwing', () => {
   assert.equal(empty.age, null);
   assert.equal(empty.experienceYears, null);
 });
+
+test('a salary is annual, or it is nothing', () => {
+  // The two failures that actually happen: a figure read in the wrong unit
+  // ("18" for 18 lakhs), and a lakhs-vs-rupees confusion inflating by 10^5.
+  // A salary wrong by that much is quoted to a candidate before anyone checks.
+  assert.equal(sanitise({ salary_amount: 1800000 }).salaryAmount, 1800000);
+  assert.equal(sanitise({ salary_amount: 18 }).salaryAmount, null);
+  assert.equal(sanitise({ salary_amount: 1.8e12 }).salaryAmount, null);
+  assert.equal(sanitise({ salary_amount: 'eighteen lakhs' }).salaryAmount, null);
+});
+
+test('a currency without an amount is dropped', () => {
+  // "INR" on its own is a fact about pay that carries no pay, and would sort
+  // and filter as though a salary were known.
+  assert.equal(sanitise({ salary_currency: 'INR' }).salaryCurrency, null);
+  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'inr' }).salaryCurrency, 'INR');
+  // A model asked for a code will sometimes answer in prose.
+  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'rupees' }).salaryCurrency, null);
+  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'Rs' }).salaryCurrency, null);
+});
+
+test('the salary a CV states is kept verbatim beside the number', () => {
+  // The recruiter quotes this string back to the candidate, so it must survive
+  // whatever the normalisation makes of it.
+  const out = sanitise({ salary_text: 'Rs. 22,00,000 + ESOPs', salary_amount: 2200000 });
+  assert.equal(out.salaryText, 'Rs. 22,00,000 + ESOPs');
+  assert.equal(out.salaryAmount, 2200000);
+});
+
+test('domains are deduplicated and bounded', () => {
+  // A model reading two employers in the same sector lists it twice, and a
+  // runaway list is a parse failure rather than a career.
+  assert.deepEqual(
+    sanitise({ domain_expertise: ['BFSI', 'bfsi', ' BFSI ', 'Manufacturing'] }).domainExpertise,
+    ['BFSI', 'Manufacturing']
+  );
+  assert.equal(sanitise({ domain_expertise: Array(20).fill().map((_, i) => `S${i}`) }).domainExpertise.length, 8);
+  assert.deepEqual(sanitise({ domain_expertise: 'BFSI' }).domainExpertise, []);
+  assert.deepEqual(sanitise({ domain_expertise: ['N/A', ''] }).domainExpertise, []);
+});
+
+test('listing status is one of two values or unknown', () => {
+  // Null is the common and correct answer, and must stay distinguishable from
+  // "we established it is unlisted" — every role that screens on this depends
+  // on the difference.
+  assert.equal(sanitise({ company_listing_status: 'Listed' }).companyListingStatus, 'listed');
+  assert.equal(sanitise({ company_listing_status: 'UNLISTED' }).companyListingStatus, 'unlisted');
+  assert.equal(sanitise({ company_listing_status: 'probably listed' }).companyListingStatus, null);
+  assert.equal(sanitise({ company_listing_status: 'public' }).companyListingStatus, null);
+  assert.equal(sanitise({}).companyListingStatus, null);
+});

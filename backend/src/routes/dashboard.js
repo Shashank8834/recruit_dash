@@ -3,6 +3,7 @@ const router = express.Router();
 const { query } = require('../db');
 const applicantsRepo = require('../repo/applicants');
 const manualJobsRepo = require('../repo/manualJobs');
+const meetingsRepo = require('../repo/meetings');
 const { dateRange } = require('../dateRange');
 
 /**
@@ -23,7 +24,8 @@ const { dateRange } = require('../dateRange');
  */
 router.get('/managed', async (_req, res) => {
   try {
-    const [stages, talent, matches, recentRoles, recentCandidates, recentNotes] = await Promise.all([
+    const [stages, talent, matches, recentRoles, recentCandidates, recentNotes,
+           meetingCounts, upcomingMeetings] = await Promise.all([
       manualJobsRepo.countsByStage(),
       query(
         `SELECT COUNT(*)::int                                            AS total,
@@ -62,20 +64,26 @@ router.get('/managed', async (_req, res) => {
       // read by whoever already knew to go looking for it.
       query(
         `SELECT n.id, n.body, n.author, n.created_at,
+                -- Every target named explicitly, with no ELSE. A default
+                -- branch here silently mislabels the next kind of note added:
+                -- meeting notes arrived after this feed did and were reported
+                -- as applicant notes with a null reference.
                 CASE
                   WHEN n.candidate_id  IS NOT NULL THEN 'candidate'
                   WHEN n.manual_job_id IS NOT NULL THEN 'role'
                   WHEN n.jd_id         IS NOT NULL THEN 'posting'
-                  ELSE 'applicant'
+                  WHEN n.contact_id    IS NOT NULL THEN 'applicant'
+                  WHEN n.meeting_id    IS NOT NULL THEN 'meeting'
                 END                                            AS target,
                 COALESCE(c.external_id, mj.external_id, j.external_id,
-                         'APP_' || cl.id)                      AS ref,
-                COALESCE(c.name, mj.title, j.title,
+                         mt.external_id, 'APP_' || cl.id)      AS ref,
+                COALESCE(c.name, mj.title, j.title, mt.subject,
                          ct.name, ct.push_name, ct.phone)      AS subject
            FROM notes n
            LEFT JOIN candidates c    ON c.id  = n.candidate_id
            LEFT JOIN manual_jobs mj  ON mj.id = n.manual_job_id
            LEFT JOIN jds j           ON j.id  = n.jd_id
+           LEFT JOIN meetings mt     ON mt.id = n.meeting_id
            LEFT JOIN contacts ct     ON ct.id = n.contact_id
            -- One classification per contact, so an applicant note links to a
            -- page that exists. LATERAL keeps it to one row: a person with
@@ -91,6 +99,8 @@ router.get('/managed', async (_req, res) => {
           ORDER BY n.created_at DESC
           LIMIT 8`
       ),
+      meetingsRepo.summary(),
+      meetingsRepo.upcoming(5),
     ]);
 
     const active = stages.open + stages.reviewing;
@@ -107,6 +117,8 @@ router.get('/managed', async (_req, res) => {
       recentRoles: recentRoles.rows,
       recentCandidates: recentCandidates.rows,
       recentNotes: recentNotes.rows,
+      meetings: meetingCounts,
+      upcomingMeetings,
     });
   } catch (err) {
     console.error(err);

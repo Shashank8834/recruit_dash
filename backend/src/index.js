@@ -15,6 +15,7 @@ const reviewRoutes = require('./routes/review');
 // can appear here by accident.
 const candidatesRoutes = require('./routes/candidates');
 const manualJobsRoutes = require('./routes/manualJobs');
+const meetingsRoutes = require('./routes/meetings');
 const sheetMirror = require('./services/sheetMirror');
 const rateLimiter = require('./services/rateLimiter');
 const llmService = require('./services/llm');
@@ -32,6 +33,7 @@ app.use('/api/applicants', applicantsRoutes);
 app.use('/api/review', reviewRoutes);
 app.use('/api/candidates', candidatesRoutes);
 app.use('/api/roles', manualJobsRoutes);
+app.use('/api/meetings', meetingsRoutes);
 app.use('/webhook', webhookRoutes);
 
 app.get('/api/health', async (_req, res) => {

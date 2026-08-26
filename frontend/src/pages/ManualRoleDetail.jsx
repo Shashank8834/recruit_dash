@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import Notes from '../components/Notes';
+import MeetingList from '../components/MeetingList';
 import { STAGES, StageTag } from '../components/RoleStage';
 import { formatDate } from '../lib/utils';
 
@@ -311,6 +312,18 @@ export default function ManualRoleDetail() {
           )}
         </section>
       )}
+
+      <section className="space-y-3">
+        <div className="flex items-end justify-between border-b border-ink pb-2">
+          <p className="micro">Meetings for this role</p>
+          <Link to="/meetings" className="btn-quiet text-xs">Book one</Link>
+        </div>
+        <MeetingList
+          meetings={role.meetings || []}
+          hideRole
+          empty="Nobody has been met for this role yet."
+        />
+      </section>
 
       <Notes
         basePath={`/api/roles/${id}`}

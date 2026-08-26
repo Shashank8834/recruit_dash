@@ -41,6 +41,30 @@ export function formatDateTime(value) {
   });
 }
 
+/**
+ * A value for `<input type="datetime-local">`, which wants local wall-clock
+ * time as `YYYY-MM-DDTHH:mm` and no timezone at all.
+ *
+ * toISOString() cannot be used here: it converts to UTC, so a meeting booked
+ * for 10:30 in India renders in the form as 05:00 the same morning, and every
+ * edit that touches the field silently moves the meeting.
+ */
+export function toDateTimeInput(value) {
+  const date = toDate(value);
+  if (!date) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+/** Whether a scheduled time has already passed. */
+export function isPast(value) {
+  const date = toDate(value);
+  return date ? date.getTime() < Date.now() : false;
+}
+
 export function toDateInput(unixTs) {
   const d = new Date(unixTs * 1000);
   return d.toISOString().split('T')[0];

@@ -15,6 +15,8 @@ const FIELDS = `
   c.id, c.external_id, c.file_name, c.file_size, c.mime_type,
   c.name, c.email, c.phone, c.current_company, c.current_designation, c.location,
   c.age, c.qualifications, c.experience_years,
+  c.salary_text, c.salary_amount, c.salary_currency,
+  c.domain_expertise, c.company_listing_status,
   c.extraction_model, c.extraction_version, c.extraction_notes,
   c.entry_mode, (c.file_data IS NOT NULL) AS has_file,
   c.uploaded_by, c.created_at, c.updated_at`;
@@ -32,9 +34,25 @@ const WHERE_FILTERS = `
      c.current_designation ILIKE '%' || $1 || '%' OR
      c.location            ILIKE '%' || $1 || '%' OR
      c.email               ILIKE '%' || $1 || '%' OR
-     c.phone               ILIKE '%' || $1 || '%'
+     c.phone               ILIKE '%' || $1 || '%' OR
+     -- Domain is a sector name someone will type into the search box and
+     -- expect to find, exactly as they would a company. ::text on the array
+     -- matches inside it without a join.
+     c.domain_expertise::text ILIKE '%' || $1 || '%'
    ))
-   AND ($2::numeric IS NULL OR c.experience_years >= $2)`;
+   AND ($2::numeric IS NULL OR c.experience_years >= $2)
+   -- A candidate with no salary on record is excluded from a salary filter
+   -- rather than assumed affordable. "Under 25 LPA" is a claim about what we
+   -- know, and an unknown salary is not evidence of a low one.
+   AND ($3::numeric IS NULL OR (c.salary_amount IS NOT NULL AND c.salary_amount <= $3))
+   AND ($4::text IS NULL OR c.company_listing_status = $4)`;
+
+// The filters occupy $1..$4; a caller that also paginates continues from $5.
+const FILTER_PARAM_COUNT = 4;
+
+function filterValues({ search, minExperience, maxSalary, listingStatus } = {}) {
+  return [search || null, minExperience ?? null, maxSalary ?? null, listingStatus || null];
+}
 
 async function create(fields, client) {
   const run = client ? client.query.bind(client) : query;
@@ -44,8 +62,11 @@ async function create(fields, client) {
         name, email, phone, current_company, current_designation, location,
         age, qualifications, experience_years,
         extraction_model, extraction_version, extraction_notes,
-        entry_mode, uploaded_by)
-     VALUES ('pending',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        entry_mode, uploaded_by,
+        salary_text, salary_amount, salary_currency,
+        domain_expertise, company_listing_status)
+     VALUES ('pending',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+             $20,$21,$22,$23,$24)
      RETURNING id`,
     [
       fields.fileName || null,
@@ -69,6 +90,13 @@ async function create(fields, client) {
       fields.extractionNotes || null,
       fields.entryMode === 'manual' ? 'manual' : 'upload',
       fields.uploadedBy || null,
+      fields.salaryText || null,
+      fields.salaryAmount === null || fields.salaryAmount === undefined
+        ? null
+        : fields.salaryAmount,
+      fields.salaryCurrency || null,
+      JSON.stringify(fields.domainExpertise || []),
+      fields.companyListingStatus || null,
     ]
   );
   // Derived from the serial id, as JDs are, so the identifier is stable and
@@ -85,25 +113,30 @@ async function create(fields, client) {
  * @param {object} opts
  * @param {string} [opts.search]  matches name, company, designation, location
  * @param {number} [opts.minExperience]
+ * @param {number} [opts.maxSalary]   annual, in whatever currency is stored
+ * @param {string} [opts.listingStatus] 'listed' | 'unlisted'
  * @param {boolean} [opts.withNotes]  fold every note into one column
  */
-async function list({ search, minExperience, withNotes = false, limit = 200, offset = 0 } = {}) {
+async function list({
+  search, minExperience, maxSalary, listingStatus,
+  withNotes = false, limit = 200, offset = 0,
+} = {}) {
   const { rows } = await query(
     `SELECT ${FIELDS},
             ${withNotes ? NOTES_AGGREGATE : NOTE_COUNT}
        FROM candidates c
       WHERE ${WHERE_FILTERS}
       ORDER BY c.created_at DESC
-      LIMIT $3 OFFSET $4`,
-    [search || null, minExperience ?? null, limit, offset]
+      LIMIT $${FILTER_PARAM_COUNT + 1} OFFSET $${FILTER_PARAM_COUNT + 2}`,
+    [...filterValues({ search, minExperience, maxSalary, listingStatus }), limit, offset]
   );
   return rows;
 }
 
-async function count({ search, minExperience } = {}) {
+async function count(filters = {}) {
   const { rows } = await query(
     `SELECT COUNT(*)::int AS count FROM candidates c WHERE ${WHERE_FILTERS}`,
-    [search || null, minExperience ?? null]
+    filterValues(filters)
   );
   return rows[0].count;
 }
@@ -154,14 +187,20 @@ async function update(externalId, fields) {
     age: 'age',
     experienceYears: 'experience_years',
     qualifications: 'qualifications',
+    salaryText: 'salary_text',
+    salaryAmount: 'salary_amount',
+    salaryCurrency: 'salary_currency',
+    domainExpertise: 'domain_expertise',
+    companyListingStatus: 'company_listing_status',
   };
 
   const sets = [];
   const values = [externalId];
   for (const [key, column] of Object.entries(allowed)) {
     if (fields[key] === undefined) continue;
-    values.push(key === 'qualifications' ? JSON.stringify(fields[key] || []) : fields[key]);
-    sets.push(`${column} = $${values.length}${key === 'qualifications' ? '::jsonb' : ''}`);
+    const isJson = key === 'qualifications' || key === 'domainExpertise';
+    values.push(isJson ? JSON.stringify(fields[key] || []) : fields[key]);
+    sets.push(`${column} = $${values.length}${isJson ? '::jsonb' : ''}`);
   }
   if (sets.length === 0) return findByExternalId(externalId);
 

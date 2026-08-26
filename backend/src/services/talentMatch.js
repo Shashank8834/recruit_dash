@@ -24,7 +24,7 @@ const { clip, applyConfidenceFloor } = require('./classifier');
  * someone a recruiter would have wanted to see, because they never reach the
  * model to be rescued.
  */
-const PROMPT_VERSION = 'talent-v1';
+const PROMPT_VERSION = 'talent-v2';
 
 const SHORTLIST_SIZE = parseInt(process.env.TALENT_SHORTLIST || '12', 10);
 const PROFILE_CHARS = parseInt(process.env.TALENT_PROFILE_CHARS || '600', 10);
@@ -60,11 +60,17 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
      SELECT c.id, c.external_id, c.name, c.email, c.phone,
             c.current_company, c.current_designation, c.location,
             c.experience_years, c.qualifications, c.raw_text,
+            c.salary_text, c.salary_amount, c.salary_currency,
+            c.domain_expertise, c.company_listing_status,
             ts_rank(
               to_tsvector('english',
                 coalesce(c.current_designation,'') || ' ' ||
                 coalesce(c.current_company,'')     || ' ' ||
                 coalesce(c.qualifications::text,'')|| ' ' ||
+                -- Sector words are how a role is often phrased ("BFSI
+                -- background essential"), and before this they only matched
+                -- if they also happened to appear in the CV body.
+                coalesce(c.domain_expertise::text,'') || ' ' ||
                 coalesce(c.raw_text,'')
               ), q.tsq
             ) AS rank
@@ -88,8 +94,18 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
               ct.email, ct.phone,
               s.combined_text,
               ts_rank(to_tsvector('english', coalesce(s.combined_text,'')), q.tsq) AS rank
-         FROM submissions s, q
+         -- The join order matters, and got this wrong until now. Written as
+         -- "FROM submissions s, q LEFT JOIN contacts ct ON ct.id = s.contact_id",
+         -- Postgres binds the LEFT JOIN to q rather than to s — comma has lower
+         -- precedence than JOIN — so s is not in scope in that ON clause and the
+         -- query fails to plan at all. Suggesting matches across both pools
+         -- raised "invalid reference to FROM-clause entry for table s" every
+         -- time; only "talent pool only", which never runs this half, worked.
+         -- The explicit CROSS JOIN puts q last and leaves s and ct joined to
+         -- each other.
+         FROM submissions s
          LEFT JOIN contacts ct ON ct.id = s.contact_id
+         CROSS JOIN q
         WHERE s.kind = 'application'
           -- EXISTS, not a join: a submission can hold more than one live
           -- classification, and joining would put the same person in the
@@ -119,8 +135,15 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
     profile: [
       c.current_designation && `Current role: ${c.current_designation}`,
       c.current_company && `Company: ${c.current_company}`,
+      c.company_listing_status && `Employer is a ${c.company_listing_status} company`,
       c.location && `Location: ${c.location}`,
       c.experience_years !== null && `Experience: ${c.experience_years} years`,
+      (c.domain_expertise || []).length &&
+        `Domain experience: ${c.domain_expertise.join(', ')}`,
+      // The verbatim string, not the normalised number. The model reasons about
+      // "24 LPA" the way the role is written; the number it would otherwise see
+      // ("2400000") invites arithmetic nobody asked for.
+      c.salary_text && `Current salary: ${c.salary_text}`,
       (c.qualifications || []).length && `Qualifications: ${c.qualifications.join(', ')}`,
       c.raw_text && `CV extract: ${clip(c.raw_text, PROFILE_CHARS, 'CV')}`,
     ].filter(Boolean).join('\n'),
@@ -158,11 +181,31 @@ Judge only what the profile states. Do not infer seniority from a job title
 alone, do not assume unstated skills because related ones appear, and do not
 penalise someone for omitting something the role does not ask for.
 
+Three attributes decide most rejections, so weigh them when the role mentions
+them and ignore them when it does not:
+
+- Domain experience: the sectors someone has worked in. A role asking for BFSI
+  or manufacturing background means the sector, not the job title. Adjacent
+  sectors are a PARTIAL, not a NONE — say which one they have and which is
+  asked for.
+- Current salary: a candidate well above the role's stated budget is a PARTIAL
+  at best however well they fit otherwise, and say so in the reason, because
+  that is the conversation the recruiter has to have. Someone well below it is
+  NOT a weaker candidate — do not treat a low salary as evidence of low
+  ability. Where either figure is missing, do not guess: judge on everything
+  else and leave salary out of the reason entirely.
+- Employer listing status: only relevant when the role asks for it. "Listed
+  company background" is about the scale and governance someone has worked
+  under, not about their quality.
+
 The profiles come from two places and differ in quality. Some are parsed CVs
 with structured fields. Others are WhatsApp messages, which are short and
 informal — a brief message is evidence of a brief message, not of a weak
-candidate. Where a profile is too thin to judge, say so with low confidence
-rather than guessing; those become review items instead of decisions.
+candidate. A WhatsApp profile will have none of the three attributes above;
+that is missing data, not a failed requirement, and must not cost the
+candidate a verdict. Where a profile is too thin to judge, say so with low
+confidence rather than guessing; those become review items instead of
+decisions.
 
 Set confidence honestly. It decides what a human looks at.`;
 

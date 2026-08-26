@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
+import MeetingList from '../components/MeetingList';
 import { formatDate } from '../lib/utils';
 
 /**
@@ -23,6 +24,18 @@ const FIELDS = [
   { key: 'location', label: 'Location' },
   { key: 'age', label: 'Age', type: 'number' },
   { key: 'experienceYears', column: 'experience_years', label: 'Total experience (years)', type: 'number' },
+  // Salary as the CV writes it, beside the number the filters use. Both are
+  // editable: the normalisation is a model's reading of a string, and the
+  // person looking at the CV is the one who can correct it.
+  { key: 'salaryText', column: 'salary_text', label: 'Salary (as stated)' },
+  { key: 'salaryAmount', column: 'salary_amount', label: 'Salary (annual, number)', type: 'number' },
+  { key: 'salaryCurrency', column: 'salary_currency', label: 'Currency' },
+];
+
+const LISTING_OPTIONS = [
+  { value: '', label: 'Not established' },
+  { value: 'listed', label: 'Listed' },
+  { value: 'unlisted', label: 'Unlisted' },
 ];
 
 export default function TalentDetail() {
@@ -176,6 +189,46 @@ export default function TalentDetail() {
         ))}
       </section>
 
+      <section className="grid gap-8 sm:grid-cols-2">
+        <label className="block">
+          <span className="micro">Employer listed</span>
+          <select
+            className="input mt-1.5 w-full"
+            value={
+              draft.companyListingStatus !== undefined
+                ? draft.companyListingStatus || ''
+                : candidate.company_listing_status || ''
+            }
+            onChange={(e) =>
+              setDraft((d) => ({ ...d, companyListingStatus: e.target.value || null }))
+            }
+          >
+            {LISTING_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="micro">Domain expertise — one per line</span>
+          <textarea
+            className="input mt-1.5 h-24 w-full"
+            value={
+              draft.domainExpertise !== undefined
+                ? draft.domainExpertise.join('\n')
+                : (candidate.domain_expertise || []).join('\n')
+            }
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                domainExpertise: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean),
+              }))
+            }
+            placeholder={'BFSI\nManufacturing'}
+          />
+        </label>
+      </section>
+
       <section className="space-y-2">
         <p className="micro">Qualifications</p>
         {(candidate.qualifications || []).length === 0 ? (
@@ -187,6 +240,18 @@ export default function TalentDetail() {
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-end justify-between border-b border-ink pb-2">
+          <p className="micro">Meetings</p>
+          <Link to="/meetings" className="btn-quiet text-xs">Book one</Link>
+        </div>
+        <MeetingList
+          meetings={candidate.meetings || []}
+          hidePerson
+          empty="No meetings with this candidate yet."
+        />
       </section>
 
       <Notes

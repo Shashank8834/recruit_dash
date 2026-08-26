@@ -19,6 +19,8 @@ import { formatDate } from '../lib/utils';
 const BLANK = {
   name: '', email: '', phone: '', currentCompany: '', currentDesignation: '',
   location: '', age: '', experienceYears: '', qualifications: '', note: '',
+  salaryText: '', salaryAmount: '', salaryCurrency: '', domainExpertise: '',
+  companyListingStatus: '',
 };
 
 export default function TalentPool() {
@@ -28,6 +30,8 @@ export default function TalentPool() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [minExperience, setMinExperience] = useState('');
+  const [maxSalary, setMaxSalary] = useState('');
+  const [listingStatus, setListingStatus] = useState('');
 
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
@@ -43,6 +47,8 @@ export default function TalentPool() {
     const p = new URLSearchParams();
     if (search.trim()) p.set('search', search.trim());
     if (minExperience) p.set('minExperience', minExperience);
+    if (maxSalary) p.set('maxSalary', maxSalary);
+    if (listingStatus) p.set('listingStatus', listingStatus);
     return p;
   };
 
@@ -53,7 +59,7 @@ export default function TalentPool() {
       .then((d) => { setCandidates(d.candidates || []); setTotal(d.total || 0); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, minExperience]);
+  }, [search, minExperience, maxSalary, listingStatus]);
 
   // Debounced: typing in the search box should not fire a query per keystroke.
   useEffect(() => {
@@ -114,8 +120,10 @@ export default function TalentPool() {
           ...form,
           age: form.age === '' ? null : Number(form.age),
           experienceYears: form.experienceYears === '' ? null : Number(form.experienceYears),
+          salaryAmount: form.salaryAmount === '' ? null : Number(form.salaryAmount),
           // One per line, as they are typed.
           qualifications: form.qualifications.split('\n').map((q) => q.trim()).filter(Boolean),
+          domainExpertise: form.domainExpertise.split('\n').map((d) => d.trim()).filter(Boolean),
         }),
       });
       if (!response.ok) {
@@ -205,7 +213,34 @@ export default function TalentPool() {
               type: 'number', min: '0', step: '0.5',
             })}
             {field('age', 'Age', { type: 'number', min: '0', step: '1' })}
+            {field('salaryText', 'Salary (as they state it)', { placeholder: '24 LPA' })}
+            {field('salaryAmount', 'Salary (annual, number)', {
+              type: 'number', min: '0', step: '1000', placeholder: '2400000',
+            })}
+            {field('salaryCurrency', 'Currency', { maxLength: 3, placeholder: 'INR' })}
+            <label className="block">
+              <span className="micro">Employer listed</span>
+              <select
+                className="input mt-1.5 w-full"
+                value={form.companyListingStatus}
+                onChange={(e) => setForm({ ...form, companyListingStatus: e.target.value })}
+              >
+                <option value="">Not established</option>
+                <option value="listed">Listed</option>
+                <option value="unlisted">Unlisted</option>
+              </select>
+            </label>
           </div>
+
+          <label className="block">
+            <span className="micro">Domain expertise — one per line</span>
+            <textarea
+              className="input mt-1.5 h-24 w-full"
+              value={form.domainExpertise}
+              onChange={(e) => setForm({ ...form, domainExpertise: e.target.value })}
+              placeholder={'BFSI\nManufacturing'}
+            />
+          </label>
 
           <label className="block">
             <span className="micro">Qualifications — one per line</span>
@@ -268,6 +303,31 @@ export default function TalentPool() {
             onChange={(e) => setMinExperience(e.target.value)}
           />
         </label>
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Max salary</span>
+          <input
+            className="input w-32"
+            type="number"
+            min="0"
+            step="100000"
+            value={maxSalary}
+            onChange={(e) => setMaxSalary(e.target.value)}
+            placeholder="2500000"
+            title="Annual, in the currency stored against each candidate"
+          />
+        </label>
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Employer</span>
+          <select
+            className="input"
+            value={listingStatus}
+            onChange={(e) => setListingStatus(e.target.value)}
+          >
+            <option value="">Any</option>
+            <option value="listed">Listed</option>
+            <option value="unlisted">Unlisted</option>
+          </select>
+        </label>
         <p className="tnum text-sm text-ink-2">{total} total</p>
       </div>
 
@@ -290,6 +350,8 @@ export default function TalentPool() {
                 <th className="th">Current role</th>
                 <th className="th">Location</th>
                 <th className="th">Experience</th>
+                <th className="th">Salary</th>
+                <th className="th">Domain</th>
                 <th className="th">Contact</th>
                 <th className="th">CV</th>
                 <th className="th">Notes</th>
@@ -318,6 +380,19 @@ export default function TalentPool() {
                     {c.experience_years === null || c.experience_years === undefined
                       ? '—'
                       : `${c.experience_years} yr`}
+                  </td>
+                  <td className="td">
+                    {c.salary_text || (c.salary_amount ? Number(c.salary_amount).toLocaleString() : '—')}
+                    {c.company_listing_status && (
+                      <span className="block text-xs text-ink-2">
+                        {c.company_listing_status === 'listed' ? 'Listed' : 'Unlisted'} employer
+                      </span>
+                    )}
+                  </td>
+                  <td className="td text-xs">
+                    {(c.domain_expertise || []).length
+                      ? c.domain_expertise.join(', ')
+                      : <span className="text-ink-3">—</span>}
                   </td>
                   <td className="td">
                     {c.email && <span className="block text-xs">{c.email}</span>}

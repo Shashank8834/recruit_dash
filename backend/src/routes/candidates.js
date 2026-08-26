@@ -7,6 +7,7 @@ const media = require('../services/media');
 const cvExtractor = require('../services/cvExtractor');
 const { toCsv, filename } = require('../csv');
 const notesRepo = require('../repo/notes');
+const meetingsRepo = require('../repo/meetings');
 const { notesRouter } = require('./notes');
 
 /**
@@ -40,6 +41,15 @@ const EXPORT_COLUMNS = [
   { key: 'age', label: 'Age' },
   { key: 'qualifications', label: 'Qualifications' },
   { key: 'experience_years', label: 'Total experience (years)' },
+  // Verbatim, not the normalised number: the sheet is read by people, and
+  // "18 LPA" is what they will say back to the candidate. The number beside it
+  // is what the filters use.
+  { key: 'salary_text', label: 'Salary' },
+  { key: 'salary_amount', label: 'Salary (annual)' },
+  { key: 'salary_currency', label: 'Currency' },
+  { key: 'domain_expertise', label: 'Domain expertise' },
+  { key: 'company_listing_status', label: 'Employer listed',
+    map: { listed: 'Listed', unlisted: 'Unlisted' } },
   // Mapped rather than dumped: 'upload' and 'manual' are storage values, and a
   // spreadsheet is read by people who never saw the schema.
   { key: 'entry_mode', label: 'Entered via', map: { upload: 'CV upload', manual: 'By hand' } },
@@ -54,6 +64,13 @@ function listFilters(req) {
   return {
     search: req.query.search || null,
     minExperience: req.query.minExperience ? parseFloat(req.query.minExperience) : null,
+    maxSalary: req.query.maxSalary ? parseFloat(req.query.maxSalary) : null,
+    // Anything that is not one of the two stored values is treated as no
+    // filter, rather than as a filter matching nothing — a typo in a query
+    // string should not silently return an empty pool.
+    listingStatus: ['listed', 'unlisted'].includes(req.query.listingStatus)
+      ? req.query.listingStatus
+      : null,
   };
 }
 
@@ -170,6 +187,15 @@ router.post('/manual', async (req, res) => {
       qualifications: Array.isArray(body.qualifications)
         ? body.qualifications.map((q) => String(q).trim()).filter(Boolean)
         : [],
+      salaryText: text(body.salaryText),
+      salaryAmount: numberOrNull(body.salaryAmount),
+      salaryCurrency: text(body.salaryCurrency),
+      domainExpertise: Array.isArray(body.domainExpertise)
+        ? body.domainExpertise.map((d) => String(d).trim()).filter(Boolean)
+        : [],
+      companyListingStatus: ['listed', 'unlisted'].includes(body.companyListingStatus)
+        ? body.companyListingStatus
+        : null,
       uploadedBy: text(body.uploadedBy),
     });
 
@@ -225,7 +251,11 @@ router.get('/:id', async (req, res) => {
   try {
     const candidate = await candidatesRepo.findByExternalId(req.params.id);
     if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
-    res.json({ ...candidate, notes: await notesRepo.list('candidate', candidate.id) });
+    const [notes, meetings] = await Promise.all([
+      notesRepo.list('candidate', candidate.id),
+      meetingsRepo.list({ candidateId: candidate.id }),
+    ]);
+    res.json({ ...candidate, notes, meetings });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

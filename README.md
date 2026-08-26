@@ -268,10 +268,48 @@ backed by its own tables and its own routes, and the two never share either:
 | `PATCH /api/roles/:id`, `DELETE /api/roles/:id` | Edit a role, move its stage, or delete it |
 | `POST /api/roles/:id/suggest` | Score candidates against the role; `?pool=manual` for the talent pool only |
 | `GET /api/roles/:id/export.csv` | The suggested matches as a spreadsheet |
+| `GET/POST /api/meetings`, `GET /api/meetings/:id` | Meetings; `?status=` and `?when=upcoming\|past` filter |
+| `PATCH /api/meetings/:id`, `DELETE /api/meetings/:id` | Edit, close, reopen, or delete a meeting |
+| `GET /api/meetings/summary` | Upcoming, closed, and never-closed counts |
+| `GET /api/meetings/export.csv` | Meetings as a spreadsheet |
 
 A role moves through **open → reviewing → placed → closed**. Uploaded CVs are
 kept as files as well as text, so a profile can be checked against the original
 document; a candidate entered by hand has no file and says so.
+
+### Meetings
+
+A meeting tags one person — a talent-pool candidate by their `CAND_` id or a
+WhatsApp applicant by their `APP_` id — optionally against a role, and moves
+from **open** to **closed** with an outcome. Its notes are the timeline: what
+happened between booking it and concluding it.
+
+The state worth acting on is **open and already past** — a conversation someone
+had and never closed. That is what the sidebar badge counts, what "Needs
+closing" filters to, and the only row the list marks.
+
+Deleting a role does **not** delete its meetings (`ON DELETE SET NULL`): the
+meeting outlives the vacancy, and erasing the record that you met three people
+for it would lose more than it tidies. Deleting the person does cascade.
+
+### What the matcher sees
+
+Extraction pulls three fields beyond the obvious ones, because they are what a
+recruiter screens on before anything else and the matcher was previously blind
+to:
+
+| Field | Stored as | Why three columns for salary |
+|---|---|---|
+| Salary | `salary_text`, `salary_amount`, `salary_currency` | The verbatim string is what gets quoted back to a candidate; the annual number is what filters compare. A wrong normalisation is expensive and invisible, so the source string is always kept |
+| Domain expertise | `domain_expertise` (array) | People span sectors, and a role asking for "BFSI background" means the sector, not the job title |
+| Employer listing status | `company_listing_status` | `listed`, `unlisted`, or NULL for "the CV did not say" — which must stay distinguishable from an established answer |
+
+Bumping `CV_EXTRACT` prompts changes `EXTRACTION_VERSION`, so CVs parsed under
+an older version can be found and re-run by that fact alone:
+
+```bash
+docker compose exec backend npm run backfill -- --reclassify --days=90
+```
 
 ### Notes
 

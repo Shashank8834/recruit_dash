@@ -10,10 +10,11 @@ import { formatDate } from '../lib/utils';
 /**
  * One hand-written role and the candidates suggested for it.
  *
- * Suggestions draw on both pools — the talent pool and WhatsApp applicants —
- * and every row is labelled with where it came from. That label is the whole
- * point of showing them together: a recruiter treats a parsed CV and a two-line
- * WhatsApp message differently, and needs to know which one they are reading.
+ * Suggestions draw on the talent pool only. A WhatsApp message is two lines of
+ * text with no CV behind it, so a model scoring one is ranking a name and a job
+ * title — and a STRONG on that evidence is not a claim anyone can act on. Rows
+ * still carry their source label, because suggestions recorded before this was
+ * narrowed are kept.
  */
 
 function SourceTag({ source }) {
@@ -147,7 +148,6 @@ export default function ManualRoleDetail() {
   const [error, setError] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const [note, setNote] = useState(null);
-  const [pool, setPool] = useState('all');
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -207,7 +207,9 @@ export default function ManualRoleDetail() {
     setSuggesting(true);
     setNote(null);
     try {
-      const params = pool === 'manual' ? '?pool=manual' : '';
+      // No pool parameter: suggestions come from the talent pool, which is the
+      // only source with a CV behind it. See the route.
+      const params = '';
       const response = await fetch(`/api/roles/${id}/suggest${params}`, { method: 'POST' });
       if (!response.ok) throw new Error(`Server error ${response.status}`);
       const data = await response.json();
@@ -366,10 +368,6 @@ export default function ManualRoleDetail() {
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-ink pb-2">
           <p className="micro">Suggested candidates · {suggestions.length}</p>
           <div className="flex flex-wrap items-center gap-3">
-            <select className="input" value={pool} onChange={(e) => setPool(e.target.value)}>
-              <option value="all">Both sources</option>
-              <option value="manual">Talent pool only</option>
-            </select>
             <button className="btn-solid" onClick={suggest} disabled={suggesting}>
               {suggesting ? 'Searching…' : 'Suggest matches'}
             </button>

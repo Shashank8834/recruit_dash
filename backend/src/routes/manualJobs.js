@@ -29,8 +29,8 @@ const uploadJd = multer({
  *
  * Separate from /api/jds, which serves job descriptions the WhatsApp pipeline
  * parsed out of messages. The two never share a table or a screen. They meet
- * only in the suggestion flow, which by request draws on both candidate pools
- * — and every suggestion records which pool it came from.
+ * only in the suggestion flow, which draws on the talent pool: a suggestion
+ * needs a CV behind it to mean anything, and every one records its source.
  */
 
 const SUGGEST_COLUMNS = [
@@ -137,9 +137,19 @@ router.post('/:id/suggest', async (req, res) => {
     const job = await manualJobsRepo.findByExternalId(req.params.id);
     if (!job) return res.status(404).json({ error: 'Role not found' });
 
-    // Both pools by default. `?pool=manual` restricts to uploaded CVs, for
-    // when someone wants to search only what they curated themselves.
-    const includeWhatsapp = req.query.pool !== 'manual';
+    // The talent pool only.
+    //
+    // A suggestion is a claim that somebody is worth putting in front of a
+    // client, and a WhatsApp message cannot support one: it is two lines of
+    // text with no CV behind it, so the model scores a name and a job title
+    // and calls it STRONG on evidence a recruiter would never accept. Mixing
+    // those into the same ranked list devalues the ones that were read from an
+    // actual CV, because the list gives no way to tell how much was known
+    // about each person before it ranked them.
+    //
+    // `?pool=all` still reaches the WhatsApp half for anyone who wants it
+    // deliberately. Nothing in the UI offers it, and it is not the default.
+    const includeWhatsapp = req.query.pool === 'all';
     const candidates = await talentMatch.shortlist(job, {
       limit: parseInt(req.query.limit || String(talentMatch.SHORTLIST_SIZE), 10),
       includeWhatsapp,

@@ -53,8 +53,15 @@ async function create({ title, company, location, description, requirements, min
 async function list({ status } = {}) {
   const { rows } = await query(
     `SELECT j.*,
+            -- Talent pool only, matching what the role page will show. Rows
+            -- recorded from WhatsApp before suggestions were narrowed to the
+            -- pool are left in the table rather than deleted — they are a
+            -- record of what was suggested at the time — but they are not
+            -- counted here, or a role would advertise matches its own page
+            -- does not list.
             (SELECT COUNT(*)::int FROM job_match_suggestions s
-              WHERE s.manual_job_id = j.id AND s.verdict IN ('STRONG','PARTIAL')
+              WHERE s.manual_job_id = j.id AND s.source = 'manual'
+                AND s.verdict IN ('STRONG','PARTIAL')
             ) AS match_count,
             ${notesRepo.countSubquery('role', 'j')} AS note_count,
             ${HAS_FILE}
@@ -268,6 +275,9 @@ async function suggestionsFor(manualJobId) {
           LIMIT 1
        ) cl ON true
       WHERE s.manual_job_id = $1
+        -- See the count above: historic WhatsApp suggestions are kept but no
+        -- longer shown, so the list cannot disagree with the number beside it.
+        AND s.source = 'manual'
       ORDER BY
         CASE s.verdict
           WHEN 'STRONG' THEN 1 WHEN 'PARTIAL' THEN 2 WHEN 'WEAK' THEN 3

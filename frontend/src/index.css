@@ -10,22 +10,35 @@
    step automatically — and there is no hue anywhere to drift.
 --------------------------------------------------------------------------- */
 @layer base {
+  /* Bare RGB channels, not hex.
+
+     Tailwind can only apply an opacity modifier — bg-ink/60, text-paper/70 —
+     to a colour it can take apart, which means the token has to arrive as
+     channels it can slot an alpha into. Held as `#0a0a0a`, every one of those
+     utilities compiled to NOTHING AT ALL: no rule was emitted, the element got
+     no background, and the failure was invisible in the CSS. It showed up as a
+     stage tag whose label was paper-on-paper, and as a mobile nav overlay that
+     never dimmed anything.
+
+     Channels plus `<alpha-value>` in the config is the shape that works, and
+     it fails loudly rather than silently if a token is ever malformed. The
+     cost is that direct CSS references need rgb() around them — see below. */
   :root {
-    --paper:   #ffffff;
-    --surface: #f6f6f6;
-    --ink:     #0a0a0a;
-    --ink-2:   #545454;
-    --ink-3:   #9b9b9b;
-    --rule:    #e2e2e2;
+    --paper:   255 255 255;
+    --surface: 246 246 246;
+    --ink:     10 10 10;
+    --ink-2:   84 84 84;
+    --ink-3:   155 155 155;
+    --rule:    226 226 226;
   }
 
   .dark {
-    --paper:   #0a0a0a;
-    --surface: #151515;
-    --ink:     #fafafa;
-    --ink-2:   #a8a8a8;
-    --ink-3:   #6a6a6a;
-    --rule:    #282828;
+    --paper:   10 10 10;
+    --surface: 21 21 21;
+    --ink:     250 250 250;
+    --ink-2:   168 168 168;
+    --ink-3:   106 106 106;
+    --rule:    40 40 40;
   }
 
   /* Preflight defaults every border to a blue-tinted gray-200. Any element
@@ -33,7 +46,7 @@
   *,
   ::before,
   ::after {
-    border-color: var(--rule);
+    border-color: rgb(var(--rule));
   }
 
   body {
@@ -47,13 +60,13 @@
   }
 
   ::selection {
-    background: var(--ink);
-    color: var(--paper);
+    background: rgb(var(--ink));
+    color: rgb(var(--paper));
   }
 
   /* One focus treatment everywhere: a hard ink ring, no colour. */
   *:focus-visible {
-    outline: 2px solid var(--ink);
+    outline: 2px solid rgb(var(--ink));
     outline-offset: 2px;
   }
 

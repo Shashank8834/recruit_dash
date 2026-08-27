@@ -40,15 +40,23 @@ router.get('/managed', async (_req, res) => {
            FROM candidates`
       ),
       query(
+        // Talent pool only, like every other match count. Suggestions recorded
+        // from WhatsApp before matching was narrowed to the pool are still in
+        // the table — they are a record of what was suggested at the time —
+        // but counting them here would put a number on this screen that no
+        // role page can account for, and a strong match nobody can open is
+        // worse than no number at all.
         `SELECT COUNT(*) FILTER (WHERE verdict = 'STRONG')::int  AS strong,
                 COUNT(*) FILTER (WHERE verdict = 'PARTIAL')::int AS partial,
                 COUNT(*)::int                                    AS total
-           FROM job_match_suggestions`
+           FROM job_match_suggestions
+          WHERE source = 'manual'`
       ),
       query(
         `SELECT j.external_id, j.title, j.company, j.status, j.created_at,
                 (SELECT COUNT(*)::int FROM job_match_suggestions s
-                  WHERE s.manual_job_id = j.id AND s.verdict IN ('STRONG','PARTIAL')
+                  WHERE s.manual_job_id = j.id AND s.source = 'manual'
+                    AND s.verdict IN ('STRONG','PARTIAL')
                 ) AS match_count
            FROM manual_jobs j
           ORDER BY j.created_at DESC LIMIT 5`

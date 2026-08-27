@@ -14,15 +14,21 @@ const { parse: parseSalary } = require('./salary');
  */
 // Bumped with the prompt: `backfill --reclassify` selects by version, so a CV
 // extracted under cv-v1 has no salary, domain or listing status and can be
-// found and re-run by that fact alone.
-const EXTRACTION_VERSION = 'cv-v3';
+// found and re-run by that fact alone. cv-v3 and earlier kept only ten skills,
+// so a CV listing thirty was stored with two thirds of it missing; re-running
+// those is the only way to recover the rest.
+const EXTRACTION_VERSION = 'cv-v4';
 
 // A CV's identity fields sit at the top, but total experience can only be
 // judged from the whole work history, so this budget is generous compared to
 // the router's. ~12k characters is about 3k tokens, which leaves room under a
 // free tier's per-minute ceiling.
 const CV_CHARS = parseInt(process.env.CV_EXTRACT_CHARS || '12000', 10);
-const CV_OUTPUT_TOKENS = parseInt(process.env.CV_EXTRACT_OUTPUT_TOKENS || '1024', 10);
+// Raised alongside the skills cap. A CV can name forty skills, and the whole
+// extraction is one JSON object — so a budget that fits the identity fields but
+// not the list truncates the response mid-array and loses the other fields with
+// it. The unused headroom costs nothing; output is billed on what is generated.
+const CV_OUTPUT_TOKENS = parseInt(process.env.CV_EXTRACT_OUTPUT_TOKENS || '3072', 10);
 
 const SYSTEM = `You extract structured details from a candidate's CV.
 
@@ -64,8 +70,16 @@ Field notes, in the order they cause mistakes:
 - skills: what the candidate can DO — "Kubernetes", "IFRS", "treasury
   management", "Python", "SAP FICO". Take them from the skills section and
   from what the work history says they actually did. Not job titles, not
-  employers, not sectors, not soft qualities like "team player". Ten at most,
-  most relevant first; an empty array when the CV never says.
+  employers, not sectors, not soft qualities like "team player".
+  List EVERY distinct skill the CV names. There is no limit and no shortlist:
+  a recruiter searches this field for one specific skill, and a skill you left
+  out because it looked minor is a candidate who cannot be found at all. Work
+  through the skills section in full — including every tool, technology,
+  framework, language, standard and platform in it — then add what the work
+  history shows them doing that the section omitted. Most relevant first, so
+  the important ones still read first. Do not merge several skills into one
+  string ("Python, Java, SQL" is three entries, not one), do not invent skills
+  the CV does not evidence, and return an empty array when it never says.
 - domain_expertise: the SECTORS the candidate has worked in, not their skills
   and not their job titles. "BFSI", "Manufacturing", "Healthcare", "SaaS",
   "Retail", "Logistics". Take them from who their employers are and what the
@@ -142,6 +156,9 @@ function sanitise(data) {
   // Deduplicated case-insensitively because a model that reads two employers in
   // the same sector, or a skill listed twice, will happily repeat it — and
   // capped, because a runaway list is a parse failure rather than a career.
+  // The cap is a guard against a model that has started repeating itself, not
+  // an editorial limit: it is set well above any real CV, so it never decides
+  // which of a candidate's skills are worth keeping.
   function cleanList(values, limit) {
     const out = [];
     const seen = new Set();
@@ -158,7 +175,11 @@ function sanitise(data) {
   }
 
   const domains = cleanList(data.domain_expertise, 8);
-  const skills = cleanList(data.skills, 10);
+  // Every skill the CV names, not the ten the model likes best. Ten looked
+  // tidy and was wrong: a full-stack CV lists that many technologies before it
+  // reaches the databases, and a skill that was dropped here is invisible to
+  // both the search box and the shortlist prefilter that ranks on this column.
+  const skills = cleanList(data.skills, 100);
 
   // The comparable figure is DERIVED from the string rather than asked for
   // separately. A model given two fields for one fact will sometimes disagree

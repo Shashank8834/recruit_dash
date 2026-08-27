@@ -88,12 +88,17 @@ test('the salary a CV states is kept verbatim beside the number', () => {
   assert.equal(out.salaryAmount, 2200000);
 });
 
-test('skills are deduplicated and bounded', () => {
+test('skills are deduplicated but not shortlisted', () => {
   assert.deepEqual(
     sanitise({ skills: ['Kubernetes', 'kubernetes', ' Kubernetes ', 'IFRS'] }).skills,
     ['Kubernetes', 'IFRS']
   );
-  assert.equal(sanitise({ skills: Array(30).fill().map((_, i) => `S${i}`) }).skills.length, 10);
+  // A long skills section is a normal CV, not a parse failure. This used to
+  // stop at ten, which quietly threw away most of what a full-stack or an ERP
+  // CV lists — and a skill that is not stored cannot be searched for.
+  assert.equal(sanitise({ skills: Array(40).fill().map((_, i) => `S${i}`) }).skills.length, 40);
+  // The cap that remains is only a guard against a model repeating itself.
+  assert.equal(sanitise({ skills: Array(200).fill().map((_, i) => `S${i}`) }).skills.length, 100);
   assert.deepEqual(sanitise({ skills: 'Kubernetes' }).skills, []);
 });
 

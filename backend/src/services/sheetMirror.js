@@ -61,6 +61,36 @@ async function pendingCount() {
   return rows[0].count;
 }
 
+/**
+ * Google Sheets rejects a cell over 50,000 characters — and rejects the WHOLE
+ * write when it does.
+ *
+ * Because the sync is a full rewrite of both sheets, one oversized row does not
+ * degrade the mirror, it stops it dead: every subsequent sync fails on the same
+ * cell, the queue never drains, and the sheet silently freezes at whatever it
+ * held before. A pasted CV in a forwarded WhatsApp message gets there easily —
+ * the row that did it in practice was 124,276 characters.
+ *
+ * So the cell is trimmed rather than the write abandoned. Postgres holds the
+ * full text and the dashboard renders it; the sheet is explicitly a read-only
+ * convenience mirror, so losing the tail of one message there costs far less
+ * than losing every row.
+ */
+const CELL_LIMIT = 50000;
+const TRUNCATION_NOTE = '… [truncated — full text in the dashboard]';
+
+/**
+ * Applied to every cell rather than to the two columns known to be long. The
+ * one that overflows is never the one you expected — a name field pasted into
+ * by a bot, a reason a model returned at length — and a guard that lists
+ * columns has to be remembered again each time a column is added.
+ */
+function fitCell(value) {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  if (text.length <= CELL_LIMIT) return text;
+  return text.slice(0, CELL_LIMIT - TRUNCATION_NOTE.length) + TRUNCATION_NOTE;
+}
+
 function toSheetDate(value) {
   if (!value) return '';
   return String(Math.floor(new Date(value).getTime() / 1000));
@@ -103,6 +133,24 @@ async function buildApplicantRows() {
 }
 
 async function writeSheet(sheets, spreadsheetId, sheetName, headers, rows) {
+  // Trimmed here, at the one place every row passes through, rather than in
+  // each builder — a second builder added later is then covered by default
+  // instead of by whoever remembers.
+  let truncated = 0;
+  const values = [headers, ...rows].map((row) => row.map((value) => {
+    const fitted = fitCell(value);
+    if (typeof value === 'string' && fitted.length < value.length) truncated += 1;
+    return fitted;
+  }));
+
+  // Said out loud. A mirror that quietly shortens what it copies is worse than
+  // one that fails, because nobody knows to go and read the original.
+  if (truncated > 0) {
+    console.warn(
+      `[sheets] ${sheetName}: ${truncated} cell(s) over ${CELL_LIMIT} characters were truncated`
+    );
+  }
+
   // Clear beyond the written range so deleted records don't linger as ghosts.
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
@@ -112,7 +160,7 @@ async function writeSheet(sheets, spreadsheetId, sheetName, headers, rows) {
     spreadsheetId,
     range: `${sheetName}!A1`,
     valueInputOption: 'RAW',
-    requestBody: { values: [headers, ...rows] },
+    requestBody: { values },
   });
 }
 
@@ -157,4 +205,4 @@ async function sync() {
   return { synced: pending.length, jdRows: jdRows.length, applicantRows: applicantRows.length };
 }
 
-module.exports = { enqueue, sync, pendingCount, isEnabled };
+module.exports = { enqueue, sync, pendingCount, isEnabled, fitCell, CELL_LIMIT };

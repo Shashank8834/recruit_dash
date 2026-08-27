@@ -243,15 +243,11 @@ export default function ManualRoleDetail() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {/* The role as a document, to send to a client or a candidate. The
-              same text the matcher scored against, so what people receive
-              cannot drift from what the tool ranked on. */}
-          <a className="btn" href={`/api/roles/${id}/jd.txt`}>Download JD text</a>
-
-          {/* The JD as it was actually sent to us — the client's own file.
-              Distinct from the text above, which is what was typed into this
-              page: the two are not the same document and the one you forward
-              to a candidate is usually this one. */}
+          {/* The JD as the client actually sent it. This used to sit beside a
+              "Download JD text" button that re-exported the description typed
+              into this page; two buttons a step apart offering different
+              documents under near-identical names is a way to send a client
+              the wrong one, and the real file is what anybody wanted. */}
           {role.has_file && (
             <>
               <a

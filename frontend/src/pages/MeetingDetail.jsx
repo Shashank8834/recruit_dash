@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
-import { MeetingStatus } from '../components/MeetingList';
-import { formatDateTime, splitDateTime, joinDateTime, isPast, DEFAULT_MEETING_TIME } from '../lib/utils';
+import { MeetingStatus, MeetingSequence } from '../components/MeetingList';
+import { formatDateTime, splitDateTime, joinDateTime, isPast, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
  * One meeting, and the account of how it went.
@@ -24,6 +24,11 @@ export default function MeetingDetail() {
   const [missing, setMissing] = useState(null);
   const [closing, setClosing] = useState(false);
   const [outcome, setOutcome] = useState('');
+  // Every other meeting with the same person. Fetched separately from the
+  // meeting itself because it is a fact about them rather than about this
+  // record, and because it has to be re-read when this meeting is rescheduled
+  // — moving a date can change which meeting is the second and which the third.
+  const [siblings, setSiblings] = useState(null);
 
   const load = useCallback(() => {
     fetch(`/api/meetings/${id}`)
@@ -39,6 +44,20 @@ export default function MeetingDetail() {
   }, [id]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    if (!meeting || !meeting.person_ref) return undefined;
+
+    let live = true;
+    fetch(`/api/meetings/history?personRef=${encodeURIComponent(meeting.person_ref)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live) setSiblings(d); })
+      .catch(() => {});
+    return () => { live = false; };
+    // Keyed on the scheduled time as well as the person: rescheduling this
+    // meeting renumbers the sequence, and a stale list would keep calling it
+    // the third after it became the first.
+  }, [meeting && meeting.person_ref, meeting && meeting.scheduled_at]);
 
   async function patch(body) {
     setSaving(true);
@@ -136,6 +155,7 @@ export default function MeetingDetail() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <MeetingSequence meeting={meeting} />
           <MeetingStatus meeting={meeting} />
           <button className="btn" onClick={() => {
             const when = splitDateTime(meeting.scheduled_at);
@@ -236,6 +256,20 @@ export default function MeetingDetail() {
           )}
           {meeting.person_phone && <p className="text-sm text-ink-2">{meeting.person_phone}</p>}
           {meeting.person_email && <p className="text-sm text-ink-2">{meeting.person_email}</p>}
+
+          {/* Straight into the booking form with them already tagged. Meeting
+              the same person again is the common next step from this page —
+              a second round, a client round — and sending someone back to the
+              meetings list to search for a name they are already looking at is
+              where that step gets skipped. */}
+          {meeting.person_ref && (
+            <Link
+              to={`/meetings?book=${encodeURIComponent(meeting.person_ref)}`}
+              className="btn mt-2 inline-block"
+            >
+              Book another with them
+            </Link>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -257,6 +291,69 @@ export default function MeetingDetail() {
               looking like missing data. */}
         </div>
       </section>
+
+      {/* The other meetings with the same person.
+          A placement is rarely one conversation — first round, client round,
+          offer — and each of those is its own record with its own notes and
+          its own outcome. Without this they are only findable by going back to
+          the list and searching the name, so the sequence they form is invisible
+          from inside any one of them. */}
+      {siblings && siblings.total > 1 && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-ink pb-2">
+            <p className="micro">
+              All {siblings.total} meetings with {meeting.person_name || 'this person'}
+            </p>
+            <p className="text-xs text-ink-2">
+              {siblings.closed} concluded · {siblings.open} open
+            </p>
+          </div>
+
+          <ul className="border border-rule">
+            {siblings.meetings.map((other) => {
+              const current = other.external_id === meeting.external_id;
+              return (
+                <li
+                  key={other.external_id}
+                  className={[
+                    'flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule px-4 py-2.5 text-sm last:border-b-0',
+                    // The one you are looking at, marked rather than linked —
+                    // a link to the page you are already on reads as a
+                    // different meeting until you click it.
+                    current ? 'bg-surface' : '',
+                  ].join(' ')}
+                >
+                  <span className="mono whitespace-nowrap">
+                    {ordinal(other.person_meeting_number)}
+                  </span>
+                  <span className="whitespace-nowrap text-xs text-ink-2">
+                    {formatDateTime(other.scheduled_at)}
+                  </span>
+                  {current ? (
+                    <span className="flex-1 truncate font-semibold text-ink">
+                      {other.subject} <span className="text-ink-3">· this one</span>
+                    </span>
+                  ) : (
+                    <Link
+                      to={`/meetings/${other.external_id}`}
+                      className="flex-1 truncate font-semibold hover:underline hover:underline-offset-4"
+                      title={other.subject}
+                    >
+                      {other.subject}
+                    </Link>
+                  )}
+                  {other.note_count > 0 && (
+                    <span className="tnum whitespace-nowrap text-xs text-ink-3">
+                      {other.note_count} note{other.note_count === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  <MeetingStatus meeting={other} />
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-ink pb-2">

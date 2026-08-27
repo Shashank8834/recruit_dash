@@ -178,8 +178,22 @@ export default function CandidateDetail() {
           to something else. */}
       <section className="space-y-3">
         <div className="flex items-end justify-between border-b border-ink pb-2">
-          <p className="micro">Meetings</p>
-          <Link to="/meetings" className="btn-quiet text-xs">Book one</Link>
+          <p className="micro">
+            Meetings
+            {(applicant.meetings || []).length > 0 && (
+              <span className="ml-2 font-normal normal-case tracking-normal text-ink-2">
+                {applicant.meetings.length} so far
+              </span>
+            )}
+          </p>
+          {/* The APP_ id, which is what the booking form resolves back to this
+              person's contact — the same anchoring the meetings themselves use. */}
+          <Link
+            to={`/meetings?book=${encodeURIComponent(applicant.Applicant_ID)}`}
+            className="btn-quiet text-xs"
+          >
+            {(applicant.meetings || []).length > 0 ? 'Book another' : 'Book one'}
+          </Link>
         </div>
         <MeetingList
           meetings={applicant.meetings || []}

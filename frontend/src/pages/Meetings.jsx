@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import MeetingList from '../components/MeetingList';
-import { joinDateTime, DEFAULT_MEETING_TIME } from '../lib/utils';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import MeetingList, { MeetingStatus } from '../components/MeetingList';
+import { joinDateTime, formatDateTime, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
  * Meetings booked with candidates, and where each one got to.
@@ -159,6 +159,84 @@ function PersonPicker({ value, onChange }) {
   );
 }
 
+/**
+ * What has already happened with the person being booked.
+ *
+ * Booking a second, third or fourth meeting with the same person is the normal
+ * shape of a placement — first round, client round, offer conversation — so
+ * nothing stops you. What was missing is the other half: at the moment you are
+ * booking, you cannot see that you already met them twice, and a "first round
+ * screening" gets booked with somebody who was screened in March.
+ *
+ * So the earlier meetings are shown here, in the form, while there is still
+ * time for them to change what gets typed into it. Counts first, because
+ * "3 already" is the part that stops the mistake; the meetings themselves
+ * under it, because "which three" is the next question.
+ */
+function PersonHistory({ history, loading }) {
+  if (loading) return <div className="skeleton h-16" />;
+  if (!history) return null;
+
+  if (history.total === 0) {
+    return (
+      <p className="border border-dashed border-rule px-4 py-3 text-sm text-ink-3">
+        No meetings with this person yet — this will be their first.
+      </p>
+    );
+  }
+
+  return (
+    <div className="border border-ink">
+      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-rule px-4 py-3">
+        <p className="text-sm font-semibold text-ink">
+          {history.total} meeting{history.total === 1 ? '' : 's'} already with this person
+        </p>
+        <p className="text-xs text-ink-2">
+          {history.closed} concluded · {history.upcoming} still to happen
+          {/* Named separately from "open", because an open meeting whose date
+              has passed is not pending — it is unfinished, and booking another
+              on top of it is usually not what was intended. */}
+          {history.overdue > 0 ? ` · ${history.overdue} never closed` : ''}
+        </p>
+        <p className="mono ml-auto">
+          This will be their {ordinal(history.nextNumber)}
+        </p>
+      </div>
+
+      <ul className="max-h-48 overflow-y-auto">
+        {history.meetings.map((meeting) => (
+          <li
+            key={meeting.external_id}
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule px-4 py-2 text-sm last:border-b-0"
+          >
+            <span className="mono whitespace-nowrap">
+              {ordinal(meeting.person_meeting_number)}
+            </span>
+            <span className="whitespace-nowrap text-xs text-ink-2">
+              {formatDateTime(meeting.scheduled_at)}
+            </span>
+            <Link
+              to={`/meetings/${meeting.external_id}`}
+              className="flex-1 truncate font-semibold hover:underline hover:underline-offset-4"
+              title={meeting.subject}
+            >
+              {meeting.subject}
+            </Link>
+            <MeetingStatus meeting={meeting} />
+          </li>
+        ))}
+      </ul>
+
+      {history.overdue > 0 && (
+        <p className="border-t border-rule px-4 py-2 text-xs text-ink-2">
+          One of these was never closed. Recording how it went keeps the sequence
+          readable — but booking the next one now is fine either way.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function Meetings() {
   const [meetings, setMeetings] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -169,11 +247,49 @@ export default function Meetings() {
   const [form, setForm] = useState(BLANK);
   const [missing, setMissing] = useState(null);
   const [roles, setRoles] = useState([]);
+  const [history, setHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
   const view = VIEWS.some((v) => v.key === params.get('view')) ? params.get('view') : '';
-  const query = (VIEWS.find((v) => v.key === view) || {}).query || '';
+  // ?book=CAND_1004 — arriving from a person's page or from a meeting with
+  // them, wanting the next one. Read once into the form rather than kept as
+  // the source of truth, so clearing the person in the picker actually clears
+  // it instead of being reinstated from the URL on the next render.
+  const bookFor = params.get('book') || '';
+  // The committed search — what the list is actually filtered by. The box below
+  // holds its own draft and only writes here once typing has settled, so every
+  // keystroke does not become a request and a history entry.
+  const search = params.get('q') || '';
+  const [term, setTerm] = useState(search);
+
+  const query = useMemo(() => {
+    const built = new URLSearchParams((VIEWS.find((v) => v.key === view) || {}).query || '');
+    if (search.trim()) built.set('search', search.trim());
+    return built.toString();
+  }, [view, search]);
+
+  // Both the view and the search live in the URL, so changing one must carry
+  // the other. Written as one function because the two call sites had each
+  // dropped the other's parameter when they set their own.
+  const setQuery = useCallback((next) => {
+    const merged = { view, q: search, ...next };
+    const cleaned = {};
+    for (const [key, value] of Object.entries(merged)) {
+      if (value) cleaned[key] = value;
+    }
+    setParams(cleaned, { replace: true });
+  }, [view, search, setParams]);
+
+  // 300ms, matching the person picker. Skipped when the draft already equals
+  // what is committed, so arriving on the page with ?q= in the URL does not
+  // immediately rewrite it.
+  useEffect(() => {
+    if (term === search) return undefined;
+    const timer = setTimeout(() => setQuery({ q: term }), 300);
+    return () => clearTimeout(timer);
+  }, [term, search, setQuery]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -194,6 +310,19 @@ export default function Meetings() {
 
   useEffect(load, [load]);
 
+  useEffect(() => {
+    if (!bookFor) return;
+    setBooking(true);
+    setForm((current) => ({ ...current, personRef: bookFor }));
+    // Dropped from the URL immediately: left there, pressing Cancel and
+    // reopening the form would silently re-tag the same person.
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('book');
+      return next;
+    }, { replace: true });
+  }, [bookFor, setParams]);
+
   // Only the roles worth booking against. A closed role in the dropdown is a
   // way to attach a meeting to something nobody is hiring for any more.
   useEffect(() => {
@@ -204,6 +333,33 @@ export default function Meetings() {
       )))
       .catch(() => {});
   }, []);
+
+  /**
+   * The chosen person's earlier meetings, re-read whenever the person changes.
+   *
+   * Cleared first rather than left showing the last person's meetings while
+   * the new ones load — a stale count under a different name is worse than no
+   * count, because it reads as an answer.
+   */
+  useEffect(() => {
+    if (!form.personRef) {
+      setHistory(null);
+      return undefined;
+    }
+
+    let live = true;
+    setHistory(null);
+    setHistoryLoading(true);
+    fetch(`/api/meetings/history?personRef=${encodeURIComponent(form.personRef)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live) setHistory(d); })
+      .catch(() => {})
+      .finally(() => { if (live) setHistoryLoading(false); });
+
+    // A second person chosen before the first request lands must not overwrite
+    // the newer answer with the older one.
+    return () => { live = false; };
+  }, [form.personRef]);
 
   async function book(event) {
     event.preventDefault();
@@ -250,6 +406,14 @@ export default function Meetings() {
     }
   }
 
+  // What the meeting is likely to be called, given how many came before. Only
+  // ever a placeholder: it is a guess about the shape of the process, and a
+  // guess must not end up saved as though somebody typed it.
+  const subjectHint =
+    history && history.nextNumber > 1
+      ? `${ordinal(history.nextNumber)} round — following up on the last conversation`
+      : 'First round — background and expectations';
+
   return (
     <div className="space-y-10">
       <header className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-5">
@@ -281,6 +445,11 @@ export default function Meetings() {
               />
             </div>
           </label>
+
+          {/* Nothing here blocks a repeat booking. Meeting the same person
+              three times is the process working, not a duplicate — this only
+              makes sure the third one is booked knowing about the first two. */}
+          {form.personRef && <PersonHistory history={history} loading={historyLoading} />}
 
           <div className="grid gap-5 sm:grid-cols-2">
             <div className="grid grid-cols-2 gap-3">
@@ -328,12 +497,19 @@ export default function Meetings() {
               native input at all and would produce no browser warning either.
               One check, in one place, reporting everything at once. */}
           <label className="block">
-            <span className="micro">What the meeting is about *</span>
+            <span className="micro">
+              What the meeting is about *
+              {history && history.nextNumber > 1 && (
+                <span className="ml-2 font-normal normal-case tracking-normal text-ink-2">
+                  their {ordinal(history.nextNumber)} meeting
+                </span>
+              )}
+            </span>
             <input
               className="input mt-1.5 w-full"
               value={form.subject}
               onChange={(e) => setForm({ ...form, subject: e.target.value })}
-              placeholder="First round — background and expectations"
+              placeholder={subjectHint}
             />
           </label>
 
@@ -383,11 +559,40 @@ export default function Meetings() {
         </div>
       )}
 
+      {/* Searched on the server rather than filtered in the browser: the list is
+          capped at 200 rows, so filtering what arrived would search a page
+          rather than the meetings, and a person met last year would not be
+          found by the box that says it finds people. */}
+      <div className="space-y-2">
+        <label className="block">
+          <span className="micro">Find a meeting</span>
+          <input
+            className="input mt-1.5 w-full"
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder="Name, email, phone, subject or MEET_ id"
+          />
+        </label>
+        {search && (
+          <p className="flex flex-wrap items-center gap-3 text-xs text-ink-2">
+            <span>
+              {loading
+                ? 'Searching…'
+                : `${meetings.length} meeting${meetings.length === 1 ? '' : 's'} matching “${search}”`}
+              {view ? ' in this view' : ''}
+            </span>
+            <button type="button" className="btn-quiet text-xs" onClick={() => setTerm('')}>
+              Clear
+            </button>
+          </p>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-px border border-rule bg-rule">
         {VIEWS.map((option) => (
           <button
             key={option.key}
-            onClick={() => setParams(option.key ? { view: option.key } : {}, { replace: true })}
+            onClick={() => setQuery({ view: option.key })}
             className={[
               'flex-1 px-4 py-2.5 text-[13px] font-semibold transition-colors',
               option.key === view
@@ -408,9 +613,11 @@ export default function Meetings() {
         <MeetingList
           meetings={meetings}
           empty={
-            view
-              ? 'Nothing in this view.'
-              : 'No meetings yet. Book one against anyone in the talent pool.'
+            search
+              ? `Nobody and nothing matching “${search}”${view ? ' in this view' : ''}.`
+              : view
+                ? 'Nothing in this view.'
+                : 'No meetings yet. Book one against anyone in the talent pool.'
           }
         />
       )}

@@ -1,5 +1,7 @@
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { formatDateTime, isPast } from '../lib/utils';
+import Notes from './Notes';
+import { formatDateTime, isPast, ordinal } from '../lib/utils';
 
 /**
  * Meetings as a table, on the Meetings page and on every record that has some.
@@ -31,6 +33,38 @@ export function MeetingStatus({ meeting }) {
       }
     >
       {label}
+    </span>
+  );
+}
+
+/**
+ * Which meeting with this person this one is.
+ *
+ * Several meetings with the same person is the normal shape of a placement —
+ * first round, client round, offer conversation — and once there are three of
+ * them the rows are near-identical: same name, same role, subjects that all
+ * say "discussion". The number is what tells them apart at a glance, and it is
+ * the thing you actually want to know when you open the list.
+ *
+ * Rendered as "2nd of 4" rather than a bare "2" so it also says how far
+ * through the sequence this one sits without opening the person's page.
+ */
+export function MeetingSequence({ meeting, className = '' }) {
+  const number = meeting.person_meeting_number;
+  const total = meeting.person_meeting_total;
+  if (!number) return null;
+
+  // A lone meeting has no sequence worth stating. Saying "1st of 1" on every
+  // one-off conversation would put a number on every row and leave the ones
+  // that matter no more visible than the ones that do not.
+  if (total <= 1) return null;
+
+  return (
+    <span
+      className={`inline-flex whitespace-nowrap items-center border border-rule bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-micro text-ink-2 ${className}`}
+      title={`The ${ordinal(number)} of ${total} meetings with this person`}
+    >
+      {ordinal(number)} of {total}
     </span>
   );
 }
@@ -78,12 +112,67 @@ function PersonName({ meeting }) {
 }
 
 /**
+ * The notes on one meeting, opened in place under its row.
+ *
+ * Comments belong to every meeting, not only to the one you happened to open.
+ * Requiring a page load to write "he asked to move it to Friday" is the reason
+ * that sentence ends up in somebody's head instead of in the record — so the
+ * same editor that lives on the meeting's page opens here, against the same
+ * endpoint.
+ *
+ * Fetched when it is expanded rather than with the list: a page of thirty
+ * meetings would otherwise pull thirty sets of notes nobody has asked to read.
+ * The count in the closed row comes from the list query, which already carries
+ * it, so the button says how many there are before anything is fetched.
+ */
+function MeetingNotes({ meetingId, onCountChange }) {
+  const [notes, setNotes] = useState(null);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(`/api/meetings/${meetingId}/notes`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Server error ${r.status}`);
+        return r.json();
+      })
+      .then((rows) => setNotes(Array.isArray(rows) ? rows : []))
+      .catch((e) => setError(e.message));
+  }, [meetingId]);
+
+  useEffect(load, [load]);
+
+  if (error) return <div className="notice-error">{error}</div>;
+  if (notes === null) return <div className="skeleton h-24" />;
+
+  return (
+    <Notes
+      basePath={`/api/meetings/${meetingId}`}
+      notes={notes}
+      onChange={(fresh) => {
+        setNotes(fresh);
+        // The closed row's count has to follow, or collapsing after adding a
+        // note shows the number it had before you wrote it.
+        if (onCountChange) onCountChange(fresh.length);
+      }}
+      placeholder="Rescheduled to Friday at their request."
+    />
+  );
+}
+
+/**
  * @param {Array}   meetings
  * @param {boolean} [hidePerson]  on a person's own page, their name in every row is noise
  * @param {boolean} [hideRole]    likewise on a role's page
  * @param {string}  [empty]       what to say when there are none
  */
 export default function MeetingList({ meetings = [], hidePerson, hideRole, empty }) {
+  // Which row's notes are open, and the counts that have moved since the list
+  // was fetched. Kept here rather than in each row so opening one closes the
+  // last: two open editors side by side is a way to write a note against the
+  // wrong meeting.
+  const [openNotes, setOpenNotes] = useState(null);
+  const [counts, setCounts] = useState({});
+
   if (meetings.length === 0) {
     return (
       <p className="border border-dashed border-rule px-4 py-8 text-center text-sm text-ink-3">
@@ -91,6 +180,13 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
       </p>
     );
   }
+
+  // Header cells, minus the ones this caller hides. Counted rather than
+  // written as a literal because the expanded notes row spans it, and a
+  // hardcoded number silently misaligns the drawer on the pages that pass
+  // hidePerson or hideRole.
+  // When, About, Status and Notes are always there; Who and Role are not.
+  const columnCount = 4 + (hidePerson ? 0 : 1) + (hideRole ? 0 : 1);
 
   return (
     <div className="overflow-x-auto">
@@ -106,59 +202,102 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
           </tr>
         </thead>
         <tbody>
-          {meetings.map((meeting) => (
-            <tr key={meeting.external_id} className="border-b border-rule hover:bg-surface">
-              <td className="td whitespace-nowrap">
-                <Link
-                  to={`/meetings/${meeting.external_id}`}
-                  className="font-semibold hover:underline hover:underline-offset-4"
-                >
-                  {formatDateTime(meeting.scheduled_at)}
-                </Link>
-                <span className="mono block">{meeting.external_id}</span>
-              </td>
+          {meetings.map((meeting) => {
+            const noteCount = counts[meeting.external_id] ?? (meeting.note_count || 0);
+            const expanded = openNotes === meeting.external_id;
 
-              {!hidePerson && (
-                <td className="td">
-                  {/* The row itself does not navigate, so the cell's links can
-                      coexist without one swallowing the other. */}
-                  <PersonName meeting={meeting} />
-                  <span className="mt-0.5 block">
-                    <PersonTag source={meeting.person_source} />
-                  </span>
-                  {meeting.person_designation && (
-                    <span className="block text-xs text-ink-2">{meeting.person_designation}</span>
+            return [
+              <tr key={meeting.external_id} className="border-b border-rule hover:bg-surface">
+                <td className="td whitespace-nowrap">
+                  <Link
+                    to={`/meetings/${meeting.external_id}`}
+                    className="font-semibold hover:underline hover:underline-offset-4"
+                  >
+                    {formatDateTime(meeting.scheduled_at)}
+                  </Link>
+                  <span className="mono block">{meeting.external_id}</span>
+                  {/* On a person's own page the name is hidden but the
+                      sequence is the whole point of the list, so it moves up
+                      here where it is always visible. */}
+                  {hidePerson && (
+                    <span className="mt-1 block">
+                      <MeetingSequence meeting={meeting} />
+                    </span>
                   )}
                 </td>
-              )}
 
-              <td className="td max-w-sm">{meeting.subject}</td>
-
-              {!hideRole && (
-                <td className="td whitespace-nowrap text-sm">
-                  {meeting.job_ref ? (
-                    <Link
-                      to={`/roles/${meeting.job_ref}`}
-                      className="hover:underline hover:underline-offset-4"
-                    >
-                      {meeting.job_title}
-                    </Link>
-                  ) : (
-                    <span className="text-ink-3">—</span>
-                  )}
-                </td>
-              )}
-
-              <td className="td">
-                <MeetingStatus meeting={meeting} />
-                {meeting.outcome && (
-                  <span className="mt-1 block max-w-xs text-xs text-ink-2">{meeting.outcome}</span>
+                {!hidePerson && (
+                  <td className="td">
+                    {/* The row itself does not navigate, so the cell's links can
+                        coexist without one swallowing the other. */}
+                    <PersonName meeting={meeting} />
+                    <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                      <PersonTag source={meeting.person_source} />
+                      <MeetingSequence meeting={meeting} />
+                    </span>
+                    {meeting.person_designation && (
+                      <span className="block text-xs text-ink-2">{meeting.person_designation}</span>
+                    )}
+                  </td>
                 )}
-              </td>
 
-              <td className="td tnum text-xs text-ink-2">{meeting.note_count || '—'}</td>
-            </tr>
-          ))}
+                <td className="td max-w-sm">{meeting.subject}</td>
+
+                {!hideRole && (
+                  <td className="td whitespace-nowrap text-sm">
+                    {meeting.job_ref ? (
+                      <Link
+                        to={`/roles/${meeting.job_ref}`}
+                        className="hover:underline hover:underline-offset-4"
+                      >
+                        {meeting.job_title}
+                      </Link>
+                    ) : (
+                      <span className="text-ink-3">—</span>
+                    )}
+                  </td>
+                )}
+
+                <td className="td">
+                  <MeetingStatus meeting={meeting} />
+                  {meeting.outcome && (
+                    <span className="mt-1 block max-w-xs text-xs text-ink-2">{meeting.outcome}</span>
+                  )}
+                </td>
+
+                <td className="td">
+                  {/* A button rather than the bare count it used to be. The
+                      number was already here and was the one thing on the row
+                      that looked like it should open something and did not. */}
+                  <button
+                    type="button"
+                    className="btn-quiet whitespace-nowrap text-xs"
+                    onClick={() => setOpenNotes(expanded ? null : meeting.external_id)}
+                    title={expanded ? 'Hide the notes' : 'Read and add notes on this meeting'}
+                  >
+                    {expanded ? 'Hide notes' : noteCount ? `${noteCount} note${noteCount === 1 ? '' : 's'}` : 'Add note'}
+                  </button>
+                </td>
+              </tr>,
+
+              expanded && (
+                <tr key={`${meeting.external_id}-notes`} className="border-b border-rule bg-surface">
+                  <td className="px-4 py-5" colSpan={columnCount}>
+                    <p className="micro mb-3">
+                      Notes on {meeting.external_id}
+                      {meeting.person_name ? ` · ${meeting.person_name}` : ''}
+                    </p>
+                    <MeetingNotes
+                      meetingId={meeting.external_id}
+                      onCountChange={(count) =>
+                        setCounts((current) => ({ ...current, [meeting.external_id]: count }))
+                      }
+                    />
+                  </td>
+                </tr>
+              ),
+            ];
+          })}
         </tbody>
       </table>
     </div>

@@ -31,7 +31,15 @@ const SELECT = `
   c.current_company                                     AS person_company,
   j.external_id                                         AS job_ref,
   j.title                                               AS job_title,
-  ${notesRepo.countSubquery('meeting', 'm')}            AS note_count`;
+  ${notesRepo.countSubquery('meeting', 'm')}            AS note_count,
+  -- Which meeting with this person this one is, and how many there are in
+  -- total. A second and a third meeting with the same person is the normal
+  -- shape of a placement, not an anomaly, so a row says where in that sequence
+  -- it sits rather than leaving four identically-titled rows to be told apart
+  -- by their dates.
+  pm.seq                                                AS person_meeting_number,
+  pm.total                                              AS person_meeting_total,
+  pm.closed                                             AS person_meetings_closed`;
 
 const FROM = `
   FROM meetings m
@@ -48,7 +56,27 @@ const FROM = `
      WHERE s2.contact_id = m.contact_id AND cl2.is_current
      ORDER BY cl2.created_at DESC
      LIMIT 1
-  ) cl ON m.contact_id IS NOT NULL`;
+  ) cl ON m.contact_id IS NOT NULL
+  -- Counted over the whole table rather than with a window function, because a
+  -- window runs after WHERE: on the "Open" or "Needs closing" views a window
+  -- would number the filtered rows 1,2,3 and call a person's fourth meeting
+  -- their first. The sequence is a fact about the person, not about the view.
+  --
+  -- NULL = NULL is NULL rather than true, so a candidate's meetings and a
+  -- contact's meetings cannot bleed into each other's counts through the null
+  -- side of the pair.
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*)::int                                             AS total,
+           COUNT(*) FILTER (WHERE m2.status = 'closed')::int         AS closed,
+           -- Ordered by the date it is set for, with the id breaking ties, so
+           -- two meetings booked for the same slot still number stably.
+           COUNT(*) FILTER (
+             WHERE (m2.scheduled_at, m2.id) <= (m.scheduled_at, m.id)
+           )::int                                                    AS seq
+      FROM meetings m2
+     WHERE m2.candidate_id = m.candidate_id
+        OR m2.contact_id   = m.contact_id
+  ) pm ON true`;
 
 async function create({
   candidateId, contactId, manualJobId, scheduledAt, subject, createdBy,
@@ -70,15 +98,39 @@ async function create({
 }
 
 /**
+ * Everything a search box on this page is expected to match.
+ *
+ * Both name columns and both phone columns, because a person reached this list
+ * from one of two pools and the searcher does not know which: a WhatsApp
+ * contact has a push_name and often no email, a talent-pool candidate has
+ * neither. Searching only the resolved COALESCE would miss a contact whose
+ * saved name differs from their WhatsApp display name — both are names
+ * somebody might type.
+ *
+ * The subject and the meeting id are in here too. "MEET_1004" and "second
+ * round" are things people paste into a search box expecting the row back, and
+ * a box that silently ignores them reads as broken rather than as narrow.
+ */
+const SEARCH_COLUMNS = [
+  'c.name', 'ct.name', 'ct.push_name',
+  'c.email', 'ct.email',
+  'c.phone', 'ct.phone',
+  'c.current_company', 'c.current_designation',
+  'm.subject', 'm.external_id', 'm.outcome',
+  'j.title',
+];
+
+/**
  * @param {object} opts
  * @param {string} [opts.status]     'open' | 'closed'
  * @param {string} [opts.when]       'upcoming' | 'past'
+ * @param {string} [opts.search]     name, email, phone, subject or id
  * @param {number} [opts.candidateId]
  * @param {number} [opts.contactId]
  * @param {number} [opts.manualJobId]
  */
 async function list({
-  status, when, candidateId, contactId, manualJobId, limit = 200,
+  status, when, search, candidateId, contactId, manualJobId, limit = 200,
 } = {}) {
   const { rows } = await query(
     `SELECT ${SELECT}
@@ -90,17 +142,65 @@ async function list({
         AND ($3::bigint IS NULL OR m.candidate_id  = $3)
         AND ($4::bigint IS NULL OR m.contact_id    = $4)
         AND ($5::bigint IS NULL OR m.manual_job_id = $5)
+        AND ($6::text IS NULL OR (
+              ${SEARCH_COLUMNS.map((col) => `${col} ILIKE '%' || $6 || '%'`).join(' OR ')}
+            ))
       -- Open meetings first, then soonest. A worklist answers "what do I still
       -- have to deal with" before "what happened in the past", and sorting by
       -- date alone buries an unclosed meeting from last month under everything
       -- since.
       ORDER BY CASE m.status WHEN 'open' THEN 0 ELSE 1 END,
                m.scheduled_at DESC
-      LIMIT $6`,
+      LIMIT $7`,
     [status || null, when || null, candidateId || null, contactId || null,
-     manualJobId || null, limit]
+     manualJobId || null, search || null, limit]
   );
   return rows;
+}
+
+/**
+ * Every meeting already held with one person, for the booking form.
+ *
+ * Booking a second or a third meeting with someone is routine, and the thing
+ * you need at that moment is what happened in the earlier ones — otherwise the
+ * form will happily let you book a first-round screening with somebody you
+ * already screened twice. Returned as counts plus the meetings themselves, so
+ * the form can both say "this will be their 3rd" and show what the first two
+ * were.
+ *
+ * Takes the same resolved ids as create(), so the caller has already turned a
+ * CAND_/APP_ reference into a column and there is no second place that has to
+ * know how that mapping works.
+ */
+async function personHistory({ candidateId, contactId }) {
+  if (!candidateId && !contactId) return null;
+
+  const meetings = await list({
+    candidateId: candidateId || null,
+    contactId: contactId || null,
+    limit: 100,
+  });
+
+  const closed = meetings.filter((m) => m.status === 'closed').length;
+  const now = Date.now();
+  const upcoming = meetings.filter(
+    (m) => m.status === 'open' && new Date(m.scheduled_at).getTime() >= now
+  ).length;
+
+  return {
+    total: meetings.length,
+    closed,
+    open: meetings.length - closed,
+    upcoming,
+    // Open and already past — the same "never concluded" count the summary
+    // strip uses, scoped to this person.
+    overdue: meetings.length - closed - upcoming,
+    // What the next one will be numbered. Booking into the past is allowed
+    // (people record meetings after the fact), and that renumbers the sequence,
+    // so this is what it would be for a meeting booked from here and now.
+    nextNumber: meetings.length + 1,
+    meetings,
+  };
 }
 
 /** The next few meetings still to happen, for the Overview. */
@@ -199,5 +299,6 @@ async function remove(externalId) {
 
 module.exports = {
   STATUSES,
-  create, list, upcoming, summary, findByExternalId, findById, update, remove,
+  create, list, upcoming, summary, personHistory,
+  findByExternalId, findById, update, remove,
 };

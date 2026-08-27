@@ -22,6 +22,10 @@ const EXPORT_COLUMNS = [
   { key: 'external_id', label: 'ID' },
   { key: 'scheduled_at', label: 'When' },
   { key: 'person_name', label: 'Person' },
+  // Which meeting with that person this was. In a spreadsheet sorted by name
+  // this is what tells a first round from a fourth without reading the dates.
+  { key: 'person_meeting_number', label: 'Meeting no.' },
+  { key: 'person_meeting_total', label: 'Meetings with them' },
   { key: 'person_ref', label: 'Person ID' },
   { key: 'person_source', label: 'From',
     map: { candidate: 'Talent pool', applicant: 'WhatsApp' } },
@@ -98,6 +102,10 @@ function listFilters(req) {
   return {
     status: meetingsRepo.STATUSES.includes(req.query.status) ? req.query.status : null,
     when: ['upcoming', 'past'].includes(req.query.when) ? req.query.when : null,
+    // Free text, matched against the person's name, email and phone as well as
+    // the subject and the meeting id. Trimmed here so a box left holding a
+    // space does not filter everything out.
+    search: text(req.query.search),
   };
 }
 
@@ -141,6 +149,29 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename('meetings')}"`);
     res.send(toCsv(EXPORT_COLUMNS, rows));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * What has already happened with one person, for the booking form.
+ *
+ * A second, third and fourth meeting with the same person is the normal shape
+ * of a placement — first round, client round, offer conversation — so the form
+ * has to make that easy AND has to say what came before it. Booking a "first
+ * round" with somebody who was already screened twice is the mistake this
+ * exists to prevent, and the only moment it can be prevented is while the form
+ * is open.
+ *
+ * Registered above /:id so 'history' is not read as a meeting id.
+ */
+router.get('/history', async (req, res) => {
+  try {
+    const person = await resolvePerson({ personRef: req.query.personRef });
+    if (person.error) return res.status(400).json({ error: person.error });
+    res.json(await meetingsRepo.personHistory(person));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

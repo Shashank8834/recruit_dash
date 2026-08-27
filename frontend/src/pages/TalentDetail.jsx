@@ -273,8 +273,24 @@ export default function TalentDetail() {
 
       <section className="space-y-3">
         <div className="flex items-end justify-between border-b border-ink pb-2">
-          <p className="micro">Meetings</p>
-          <Link to="/meetings" className="btn-quiet text-xs">Book one</Link>
+          <p className="micro">
+            Meetings
+            {/* Said here as well as in the rows, because this is the page you
+                are on when you decide whether to book another. */}
+            {(candidate.meetings || []).length > 0 && (
+              <span className="ml-2 font-normal normal-case tracking-normal text-ink-2">
+                {candidate.meetings.length} so far
+              </span>
+            )}
+          </p>
+          {/* Prefilled with this candidate rather than dropping you on an empty
+              meetings page to search for the name you are already looking at. */}
+          <Link
+            to={`/meetings?book=${encodeURIComponent(candidate.external_id)}`}
+            className="btn-quiet text-xs"
+          >
+            {(candidate.meetings || []).length > 0 ? 'Book another' : 'Book one'}
+          </Link>
         </div>
         <MeetingList
           meetings={candidate.meetings || []}

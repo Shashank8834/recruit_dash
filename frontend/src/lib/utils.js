@@ -93,6 +93,24 @@ export function joinDateTime(date, time) {
   return `${date}T${time || DEFAULT_MEETING_TIME}`;
 }
 
+/**
+ * "1st", "2nd", "3rd", "11th" — for numbering a person's meetings.
+ *
+ * The teens are the whole reason this is a function rather than a lookup on the
+ * last digit: 11, 12 and 13 take "th" while 21, 22 and 23 do not, so a naive
+ * version renders somebody's 11th meeting as their "11st".
+ */
+export function ordinal(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '';
+  const tens = num % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : ({ 1: 'st', 2: 'nd', 3: 'rd' }[num % 10] || 'th');
+  return `${num}${suffix}`;
+}
+
 /** Whether a scheduled time has already passed. */
 export function isPast(value) {
   const date = toDate(value);

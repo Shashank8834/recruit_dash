@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const notesRepo = require('../repo/notes');
 const { notesRouter } = require('./notes');
+const jdDocument = require('../services/jdDocument');
 const jdsRepo = require('../repo/jds');
 const applicantsRepo = require('../repo/applicants');
 const sheetMirror = require('../services/sheetMirror');
@@ -59,6 +60,25 @@ router.delete('/:id', async (req, res) => {
     if (!deleted) return res.status(404).json({ error: 'JD not found' });
     await sheetMirror.enqueue('jd', deleted.id, 'delete');
     res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** The posting as a document, including the message it was parsed from. */
+router.get('/:id/jd.txt', async (req, res) => {
+  try {
+    const jd = await jdsRepo.findByExternalId(req.params.id);
+    if (!jd) return res.status(404).json({ error: 'JD not found' });
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${jdDocument.fileNameFor(jd.title, jd.external_id)}"`
+    );
+    res.send(jdDocument.forPosting(jd));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

@@ -19,8 +19,7 @@ import { formatDate } from '../lib/utils';
 const BLANK = {
   name: '', email: '', phone: '', currentCompany: '', currentDesignation: '',
   location: '', age: '', experienceYears: '', qualifications: '', note: '',
-  salaryText: '', salaryAmount: '', salaryCurrency: '', domainExpertise: '',
-  companyListingStatus: '',
+  salaryText: '', domainExpertise: '', skills: '', companyListingStatus: '',
 };
 
 export default function TalentPool() {
@@ -30,7 +29,10 @@ export default function TalentPool() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [minExperience, setMinExperience] = useState('');
-  const [maxSalary, setMaxSalary] = useState('');
+  const [salaryFrom, setSalaryFrom] = useState('');
+  const [salaryTo, setSalaryTo] = useState('');
+  const [domain, setDomain] = useState('');
+  const [skill, setSkill] = useState('');
   const [listingStatus, setListingStatus] = useState('');
 
   const [uploading, setUploading] = useState(false);
@@ -47,7 +49,10 @@ export default function TalentPool() {
     const p = new URLSearchParams();
     if (search.trim()) p.set('search', search.trim());
     if (minExperience) p.set('minExperience', minExperience);
-    if (maxSalary) p.set('maxSalary', maxSalary);
+    if (salaryFrom.trim()) p.set('salaryFrom', salaryFrom.trim());
+    if (salaryTo.trim()) p.set('salaryTo', salaryTo.trim());
+    if (domain.trim()) p.set('domain', domain.trim());
+    if (skill.trim()) p.set('skill', skill.trim());
     if (listingStatus) p.set('listingStatus', listingStatus);
     return p;
   };
@@ -59,7 +64,7 @@ export default function TalentPool() {
       .then((d) => { setCandidates(d.candidates || []); setTotal(d.total || 0); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, minExperience, maxSalary, listingStatus]);
+  }, [search, minExperience, salaryFrom, salaryTo, domain, skill, listingStatus]);
 
   // Debounced: typing in the search box should not fire a query per keystroke.
   useEffect(() => {
@@ -120,10 +125,10 @@ export default function TalentPool() {
           ...form,
           age: form.age === '' ? null : Number(form.age),
           experienceYears: form.experienceYears === '' ? null : Number(form.experienceYears),
-          salaryAmount: form.salaryAmount === '' ? null : Number(form.salaryAmount),
           // One per line, as they are typed.
           qualifications: form.qualifications.split('\n').map((q) => q.trim()).filter(Boolean),
           domainExpertise: form.domainExpertise.split('\n').map((d) => d.trim()).filter(Boolean),
+          skills: form.skills.split('\n').map((k) => k.trim()).filter(Boolean),
         }),
       });
       if (!response.ok) {
@@ -213,11 +218,7 @@ export default function TalentPool() {
               type: 'number', min: '0', step: '0.5',
             })}
             {field('age', 'Age', { type: 'number', min: '0', step: '1' })}
-            {field('salaryText', 'Salary (as they state it)', { placeholder: '24 LPA' })}
-            {field('salaryAmount', 'Salary (annual, number)', {
-              type: 'number', min: '0', step: '1000', placeholder: '2400000',
-            })}
-            {field('salaryCurrency', 'Currency', { maxLength: 3, placeholder: 'INR' })}
+            {field('salaryText', 'Current salary', { placeholder: '24 LPA' })}
             <label className="block">
               <span className="micro">Employer listed</span>
               <select
@@ -232,15 +233,26 @@ export default function TalentPool() {
             </label>
           </div>
 
-          <label className="block">
-            <span className="micro">Domain expertise — one per line</span>
-            <textarea
-              className="input mt-1.5 h-24 w-full"
-              value={form.domainExpertise}
-              onChange={(e) => setForm({ ...form, domainExpertise: e.target.value })}
-              placeholder={'BFSI\nManufacturing'}
-            />
-          </label>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <label className="block">
+              <span className="micro">Skills — one per line</span>
+              <textarea
+                className="input mt-1.5 h-24 w-full"
+                value={form.skills}
+                onChange={(e) => setForm({ ...form, skills: e.target.value })}
+                placeholder={'IFRS\nTreasury management'}
+              />
+            </label>
+            <label className="block">
+              <span className="micro">Domain expertise — one per line</span>
+              <textarea
+                className="input mt-1.5 h-24 w-full"
+                value={form.domainExpertise}
+                onChange={(e) => setForm({ ...form, domainExpertise: e.target.value })}
+                placeholder={'BFSI\nManufacturing'}
+              />
+            </label>
+          </div>
 
           <label className="block">
             <span className="micro">Qualifications — one per line</span>
@@ -304,16 +316,43 @@ export default function TalentPool() {
           />
         </label>
         <label className="flex items-center gap-2.5">
-          <span className="micro">Max salary</span>
+          <span className="micro">Skill</span>
           <input
-            className="input w-32"
-            type="number"
-            min="0"
-            step="100000"
-            value={maxSalary}
-            onChange={(e) => setMaxSalary(e.target.value)}
-            placeholder="2500000"
-            title="Annual, in the currency stored against each candidate"
+            className="input w-36"
+            value={skill}
+            onChange={(e) => setSkill(e.target.value)}
+            placeholder="Kubernetes"
+            title="Matches any one of a candidate's skills"
+          />
+        </label>
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Domain</span>
+          <input
+            className="input w-36"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="BFSI"
+            title="Matches any one of a candidate's sectors"
+          />
+        </label>
+        {/* Typed the way salaries are written — "20 LPA", not 2000000 — and
+            read with the same parser that reads the field it filters on, so
+            the box and the column speak the same language. */}
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Current salary</span>
+          <input
+            className="input w-28"
+            value={salaryFrom}
+            onChange={(e) => setSalaryFrom(e.target.value)}
+            placeholder="from 15 LPA"
+            title="Lowest current salary to include, e.g. 15 LPA"
+          />
+          <input
+            className="input w-28"
+            value={salaryTo}
+            onChange={(e) => setSalaryTo(e.target.value)}
+            placeholder="to 30 LPA"
+            title="Highest current salary to include, e.g. 30 LPA"
           />
         </label>
         <label className="flex items-center gap-2.5">
@@ -350,7 +389,8 @@ export default function TalentPool() {
                 <th className="th">Current role</th>
                 <th className="th">Location</th>
                 <th className="th">Experience</th>
-                <th className="th">Salary</th>
+                <th className="th">Current salary</th>
+                <th className="th">Skills</th>
                 <th className="th">Domain</th>
                 <th className="th">Contact</th>
                 <th className="th">CV</th>
@@ -382,12 +422,17 @@ export default function TalentPool() {
                       : `${c.experience_years} yr`}
                   </td>
                   <td className="td">
-                    {c.salary_text || (c.salary_amount ? Number(c.salary_amount).toLocaleString() : '—')}
+                    {c.salary_text || <span className="text-ink-3">—</span>}
                     {c.company_listing_status && (
                       <span className="block text-xs text-ink-2">
                         {c.company_listing_status === 'listed' ? 'Listed' : 'Unlisted'} employer
                       </span>
                     )}
+                  </td>
+                  <td className="td max-w-[14rem] text-xs">
+                    {(c.skills || []).length
+                      ? c.skills.join(', ')
+                      : <span className="text-ink-3">—</span>}
                   </td>
                   <td className="td text-xs">
                     {(c.domain_expertise || []).length
@@ -399,23 +444,42 @@ export default function TalentPool() {
                     {c.phone && <span className="block text-xs text-ink-2">{c.phone}</span>}
                     {!c.email && !c.phone && '—'}
                   </td>
-                  <td className="td">
+                  {/* stopPropagation on each: the row navigates, and a click
+                      meant for the document should open the document. */}
+                  <td className="td whitespace-nowrap">
                     {c.has_file ? (
-                      // stopPropagation: the row navigates, and a click meant
-                      // for the document should open the document.
+                      <span className="flex gap-3">
+                        <a
+                          className="btn-quiet text-xs"
+                          href={`/api/candidates/${c.external_id}/file`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          View
+                        </a>
+                        <a
+                          className="btn-quiet text-xs"
+                          href={`/api/candidates/${c.external_id}/file?download=1`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Download
+                        </a>
+                      </span>
+                    ) : c.entry_mode === 'manual' ? (
+                      <span className="text-xs text-ink-3">By hand</span>
+                    ) : (
+                      // Uploaded before the file itself was kept. The extracted
+                      // text is all there is, and offering it beats a profile
+                      // with no way to read the CV at all.
                       <a
                         className="btn-quiet text-xs"
-                        href={`/api/candidates/${c.external_id}/file`}
-                        target="_blank"
-                        rel="noreferrer"
+                        href={`/api/candidates/${c.external_id}/cv.txt`}
                         onClick={(e) => e.stopPropagation()}
+                        title="The original file was not kept for this upload — this is the extracted text"
                       >
-                        View
+                        Text only
                       </a>
-                    ) : (
-                      <span className="text-xs text-ink-3">
-                        {c.entry_mode === 'manual' ? 'By hand' : '—'}
-                      </span>
                     )}
                   </td>
                   <td className="td tnum text-xs text-ink-2">{c.note_count || '—'}</td>

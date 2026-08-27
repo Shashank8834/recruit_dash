@@ -1,5 +1,6 @@
 const { query } = require('../db');
 const notesRepo = require('./notes');
+const { parse: parseSalary } = require('../services/salary');
 
 /**
  * Uploaded CVs and hand-entered candidates. Nothing in the WhatsApp pipeline
@@ -16,7 +17,7 @@ const FIELDS = `
   c.name, c.email, c.phone, c.current_company, c.current_designation, c.location,
   c.age, c.qualifications, c.experience_years,
   c.salary_text, c.salary_amount, c.salary_currency,
-  c.domain_expertise, c.company_listing_status,
+  c.domain_expertise, c.skills, c.company_listing_status,
   c.extraction_model, c.extraction_version, c.extraction_notes,
   c.entry_mode, (c.file_data IS NOT NULL) AS has_file,
   c.uploaded_by, c.created_at, c.updated_at`;
@@ -35,23 +36,42 @@ const WHERE_FILTERS = `
      c.location            ILIKE '%' || $1 || '%' OR
      c.email               ILIKE '%' || $1 || '%' OR
      c.phone               ILIKE '%' || $1 || '%' OR
-     -- Domain is a sector name someone will type into the search box and
-     -- expect to find, exactly as they would a company. ::text on the array
-     -- matches inside it without a join.
-     c.domain_expertise::text ILIKE '%' || $1 || '%'
+     -- Sectors and skills are what people type into a search box expecting to
+     -- find someone, exactly as they would a company name. ::text matches
+     -- inside the array without a join.
+     c.domain_expertise::text ILIKE '%' || $1 || '%' OR
+     c.skills::text ILIKE '%' || $1 || '%'
    ))
    AND ($2::numeric IS NULL OR c.experience_years >= $2)
    -- A candidate with no salary on record is excluded from a salary filter
-   -- rather than assumed affordable. "Under 25 LPA" is a claim about what we
-   -- know, and an unknown salary is not evidence of a low one.
-   AND ($3::numeric IS NULL OR (c.salary_amount IS NOT NULL AND c.salary_amount <= $3))
-   AND ($4::text IS NULL OR c.company_listing_status = $4)`;
+   -- rather than assumed to fall inside it. "Under 25 LPA" is a claim about
+   -- what we know, and an unknown salary is not evidence of a low one.
+   AND ($3::numeric IS NULL OR (c.salary_amount IS NOT NULL AND c.salary_amount >= $3))
+   AND ($4::numeric IS NULL OR (c.salary_amount IS NOT NULL AND c.salary_amount <= $4))
+   AND ($5::text IS NULL OR c.company_listing_status = $5)
+   -- Domain and skill filters match any element, case-insensitively and on a
+   -- substring: someone searching "finance" should find "Corporate Finance"
+   -- rather than only an exact tag. jsonb_array_elements_text unpacks the
+   -- array so ILIKE applies per entry rather than to the whole JSON blob,
+   -- which would also match the punctuation between entries.
+   AND ($6::text IS NULL OR EXISTS (
+         SELECT 1 FROM jsonb_array_elements_text(c.domain_expertise) d
+          WHERE d ILIKE '%' || $6 || '%'))
+   AND ($7::text IS NULL OR EXISTS (
+         SELECT 1 FROM jsonb_array_elements_text(c.skills) sk
+          WHERE sk ILIKE '%' || $7 || '%'))`;
 
-// The filters occupy $1..$4; a caller that also paginates continues from $5.
-const FILTER_PARAM_COUNT = 4;
+// The filters occupy $1..$7; a caller that also paginates continues from $8.
+const FILTER_PARAM_COUNT = 7;
 
-function filterValues({ search, minExperience, maxSalary, listingStatus } = {}) {
-  return [search || null, minExperience ?? null, maxSalary ?? null, listingStatus || null];
+function filterValues({
+  search, minExperience, salaryFrom, salaryTo, listingStatus, domain, skill,
+} = {}) {
+  return [
+    search || null, minExperience ?? null,
+    salaryFrom ?? null, salaryTo ?? null,
+    listingStatus || null, domain || null, skill || null,
+  ];
 }
 
 async function create(fields, client) {
@@ -64,9 +84,9 @@ async function create(fields, client) {
         extraction_model, extraction_version, extraction_notes,
         entry_mode, uploaded_by,
         salary_text, salary_amount, salary_currency,
-        domain_expertise, company_listing_status)
+        domain_expertise, skills, company_listing_status)
      VALUES ('pending',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-             $20,$21,$22,$23,$24)
+             $20,$21,$22,$23,$24,$25)
      RETURNING id`,
     [
       fields.fileName || null,
@@ -96,6 +116,7 @@ async function create(fields, client) {
         : fields.salaryAmount,
       fields.salaryCurrency || null,
       JSON.stringify(fields.domainExpertise || []),
+      JSON.stringify(fields.skills || []),
       fields.companyListingStatus || null,
     ]
   );
@@ -113,12 +134,15 @@ async function create(fields, client) {
  * @param {object} opts
  * @param {string} [opts.search]  matches name, company, designation, location
  * @param {number} [opts.minExperience]
- * @param {number} [opts.maxSalary]   annual, in whatever currency is stored
+ * @param {number} [opts.salaryFrom]  annual, in whatever currency is stored
+ * @param {number} [opts.salaryTo]
  * @param {string} [opts.listingStatus] 'listed' | 'unlisted'
+ * @param {string} [opts.domain]      matches any one sector, as a substring
+ * @param {string} [opts.skill]       matches any one skill, as a substring
  * @param {boolean} [opts.withNotes]  fold every note into one column
  */
 async function list({
-  search, minExperience, maxSalary, listingStatus,
+  search, minExperience, salaryFrom, salaryTo, listingStatus, domain, skill,
   withNotes = false, limit = 200, offset = 0,
 } = {}) {
   const { rows } = await query(
@@ -128,7 +152,8 @@ async function list({
       WHERE ${WHERE_FILTERS}
       ORDER BY c.created_at DESC
       LIMIT $${FILTER_PARAM_COUNT + 1} OFFSET $${FILTER_PARAM_COUNT + 2}`,
-    [...filterValues({ search, minExperience, maxSalary, listingStatus }), limit, offset]
+    [...filterValues({ search, minExperience, salaryFrom, salaryTo, listingStatus, domain, skill }),
+     limit, offset]
   );
   return rows;
 }
@@ -177,6 +202,15 @@ async function fileFor(externalId) {
 
 /** Corrects a field the extraction got wrong. Recruiters will always need this. */
 async function update(externalId, fields) {
+  // The comparable figure follows the string it came from. Nobody types the
+  // annual number any more — there is one salary field on screen — so editing
+  // "24 LPA" to "30 LPA" has to move the amount the filters compare, or the
+  // candidate keeps ranking against a salary they no longer have.
+  if (fields.salaryText !== undefined && fields.salaryAmount === undefined) {
+    const parsed = parseSalary(fields.salaryText || '');
+    fields = { ...fields, salaryAmount: parsed.amount, salaryCurrency: parsed.currency };
+  }
+
   const allowed = {
     name: 'name',
     email: 'email',
@@ -191,6 +225,7 @@ async function update(externalId, fields) {
     salaryAmount: 'salary_amount',
     salaryCurrency: 'salary_currency',
     domainExpertise: 'domain_expertise',
+    skills: 'skills',
     companyListingStatus: 'company_listing_status',
   };
 
@@ -198,7 +233,7 @@ async function update(externalId, fields) {
   const values = [externalId];
   for (const [key, column] of Object.entries(allowed)) {
     if (fields[key] === undefined) continue;
-    const isJson = key === 'qualifications' || key === 'domainExpertise';
+    const isJson = ['qualifications', 'domainExpertise', 'skills'].includes(key);
     values.push(isJson ? JSON.stringify(fields[key] || []) : fields[key]);
     sets.push(`${column} = $${values.length}${isJson ? '::jsonb' : ''}`);
   }

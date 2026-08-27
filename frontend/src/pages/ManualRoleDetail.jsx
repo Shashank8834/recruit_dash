@@ -242,6 +242,10 @@ export default function ManualRoleDetail() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {/* The role as a document, to send to a client or a candidate. The
+              same text the matcher scored against, so what people receive
+              cannot drift from what the tool ranked on. */}
+          <a className="btn" href={`/api/roles/${id}/jd.txt`}>Download JD</a>
           <button className="btn" onClick={() => setEditing((e) => !e)}>
             {editing ? 'Cancel edit' : 'Edit'}
           </button>

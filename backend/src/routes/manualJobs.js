@@ -7,6 +7,7 @@ const { toCsv, filename } = require('../csv');
 const notesRepo = require('../repo/notes');
 const meetingsRepo = require('../repo/meetings');
 const { notesRouter } = require('./notes');
+const jdDocument = require('../services/jdDocument');
 
 /**
  * Roles a recruiter writes by hand, and the candidate suggestions for them.
@@ -185,6 +186,32 @@ router.post('/:id/suggest', async (req, res) => {
 // Notes on the role — what was agreed with the client, why the brief changed.
 // Mounted from the shared router; only the id lookup is specific to roles.
 router.use('/:id/notes', notesRouter('role', (id) => manualJobsRepo.findByExternalId(id)));
+
+/**
+ * The role as a document, to send on.
+ *
+ * Separate from export.csv, which is the list of candidates matched to it. This
+ * is the role itself — the thing a client or a candidate is sent, and the
+ * version the matcher actually scored against, so what people receive cannot
+ * drift from what the tool ranked on.
+ */
+router.get('/:id/jd.txt', async (req, res) => {
+  try {
+    const job = await manualJobsRepo.findByExternalId(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Role not found' });
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${jdDocument.fileNameFor(job.title, job.external_id)}"`
+    );
+    res.send(jdDocument.forRole(job));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/:id/export.csv', async (req, res) => {
   try {

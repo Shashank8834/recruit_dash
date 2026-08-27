@@ -261,6 +261,7 @@ backed by its own tables and its own routes, and the two never share either:
 | `POST /api/candidates/manual` | Enter a candidate by hand; only `name` is required |
 | `GET /api/candidates`, `GET /api/candidates/:id` | The talent pool; detail includes notes and the CV text |
 | `GET /api/candidates/:id/file` | The stored CV — inline for PDFs, `?download=1` to save |
+| `GET /api/candidates/:id/cv.txt` | The extracted text, for uploads made before the file itself was kept |
 | `PATCH /api/candidates/:id`, `DELETE /api/candidates/:id` | Correct an extracted field, or remove the candidate |
 | `GET /api/candidates/export.csv` | The pool as a spreadsheet, notes included |
 | `GET /api/roles/stages` | The stages a role can sit at, in order |
@@ -268,6 +269,8 @@ backed by its own tables and its own routes, and the two never share either:
 | `PATCH /api/roles/:id`, `DELETE /api/roles/:id` | Edit a role, move its stage, or delete it |
 | `POST /api/roles/:id/suggest` | Score candidates against the role; `?pool=manual` for the talent pool only |
 | `GET /api/roles/:id/export.csv` | The suggested matches as a spreadsheet |
+| `GET /api/roles/:id/jd.txt` | The role as a document, to send on |
+| `GET /api/jds/:id/jd.txt` | A WhatsApp posting as a document, including the original message |
 | `GET/POST /api/meetings`, `GET /api/meetings/:id` | Meetings; `?status=` and `?when=upcoming\|past` filter |
 | `PATCH /api/meetings/:id`, `DELETE /api/meetings/:id` | Edit, close, reopen, or delete a meeting |
 | `GET /api/meetings/summary` | Upcoming, closed, and never-closed counts |
@@ -298,11 +301,19 @@ Extraction pulls three fields beyond the obvious ones, because they are what a
 recruiter screens on before anything else and the matcher was previously blind
 to:
 
-| Field | Stored as | Why three columns for salary |
+| Field | Stored as | Notes |
 |---|---|---|
-| Salary | `salary_text`, `salary_amount`, `salary_currency` | The verbatim string is what gets quoted back to a candidate; the annual number is what filters compare. A wrong normalisation is expensive and invisible, so the source string is always kept |
-| Domain expertise | `domain_expertise` (array) | People span sectors, and a role asking for "BFSI background" means the sector, not the job title |
+| Skills | `skills` (array) | What someone can do — Kubernetes, IFRS, treasury management. Distinct from domain: rolled together, a search for one returns the other and both stop being useful |
+| Domain expertise | `domain_expertise` (array) | The sectors they have worked in. A role asking for "BFSI background" means the sector, not the job title |
+| Current salary | `salary_text` + derived `salary_amount`, `salary_currency` | Only the string is authored. The comparable annual number is parsed from it by `services/salary.js`, so the two can never disagree — "24 LPA" becomes 2400000 INR, "Negotiable" becomes nothing |
 | Employer listing status | `company_listing_status` | `listed`, `unlisted`, or NULL for "the CV did not say" — which must stay distinguishable from an established answer |
+
+The talent pool filters on all of these. `skill` and `domain` match any one
+entry as a substring, so "finance" finds "Corporate Finance". `salaryFrom` and
+`salaryTo` are **typed the way salaries are written** — "20 LPA", not 2000000 —
+and read with the same parser as the field they filter on. A candidate whose
+salary could not be parsed is excluded from a salary range rather than assumed
+to fall inside it: an unknown salary is not evidence of a low one.
 
 Bumping `CV_EXTRACT` prompts changes `EXTRACTION_VERSION`, so CVs parsed under
 an older version can be found and re-run by that fact alone:

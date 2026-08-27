@@ -53,32 +53,48 @@ test('an empty extraction yields all nulls rather than throwing', () => {
   assert.equal(empty.experienceYears, null);
 });
 
-test('a salary is annual, or it is nothing', () => {
-  // The two failures that actually happen: a figure read in the wrong unit
-  // ("18" for 18 lakhs), and a lakhs-vs-rupees confusion inflating by 10^5.
-  // A salary wrong by that much is quoted to a candidate before anyone checks.
-  assert.equal(sanitise({ salary_amount: 1800000 }).salaryAmount, 1800000);
-  assert.equal(sanitise({ salary_amount: 18 }).salaryAmount, null);
-  assert.equal(sanitise({ salary_amount: 1.8e12 }).salaryAmount, null);
-  assert.equal(sanitise({ salary_amount: 'eighteen lakhs' }).salaryAmount, null);
+test('the salary number is derived from the string, not asked for separately', () => {
+  // The model is given one salary field. Asking it for the string AND the
+  // number invited the two to disagree — "24 LPA" alongside 24 — with no way
+  // to tell which half was wrong. Now there is only one authored value.
+  const out = sanitise({ salary_text: '18 LPA' });
+  assert.equal(out.salaryText, '18 LPA');
+  assert.equal(out.salaryAmount, 1800000);
+  assert.equal(out.salaryCurrency, 'INR');
 });
 
-test('a currency without an amount is dropped', () => {
-  // "INR" on its own is a fact about pay that carries no pay, and would sort
-  // and filter as though a salary were known.
-  assert.equal(sanitise({ salary_currency: 'INR' }).salaryCurrency, null);
-  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'inr' }).salaryCurrency, 'INR');
-  // A model asked for a code will sometimes answer in prose.
-  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'rupees' }).salaryCurrency, null);
-  assert.equal(sanitise({ salary_amount: 1800000, salary_currency: 'Rs' }).salaryCurrency, null);
+test('a number the model volunteers anyway is ignored', () => {
+  // salary_amount is no longer in the schema. If a model sends one regardless
+  // it must not override the parse of the string the recruiter actually reads.
+  const out = sanitise({ salary_text: '18 LPA', salary_amount: 18, salary_currency: 'USD' });
+  assert.equal(out.salaryAmount, 1800000);
+  assert.equal(out.salaryCurrency, 'INR');
+});
+
+test('an unparseable salary keeps its text and drops the number', () => {
+  // "Negotiable" is worth showing a recruiter and worth nothing to a filter,
+  // and a filter must not invent a figure to sort it by.
+  const out = sanitise({ salary_text: 'Negotiable' });
+  assert.equal(out.salaryText, 'Negotiable');
+  assert.equal(out.salaryAmount, null);
+  assert.equal(out.salaryCurrency, null);
 });
 
 test('the salary a CV states is kept verbatim beside the number', () => {
   // The recruiter quotes this string back to the candidate, so it must survive
   // whatever the normalisation makes of it.
-  const out = sanitise({ salary_text: 'Rs. 22,00,000 + ESOPs', salary_amount: 2200000 });
+  const out = sanitise({ salary_text: 'Rs. 22,00,000 + ESOPs' });
   assert.equal(out.salaryText, 'Rs. 22,00,000 + ESOPs');
   assert.equal(out.salaryAmount, 2200000);
+});
+
+test('skills are deduplicated and bounded', () => {
+  assert.deepEqual(
+    sanitise({ skills: ['Kubernetes', 'kubernetes', ' Kubernetes ', 'IFRS'] }).skills,
+    ['Kubernetes', 'IFRS']
+  );
+  assert.equal(sanitise({ skills: Array(30).fill().map((_, i) => `S${i}`) }).skills.length, 10);
+  assert.deepEqual(sanitise({ skills: 'Kubernetes' }).skills, []);
 });
 
 test('domains are deduplicated and bounded', () => {

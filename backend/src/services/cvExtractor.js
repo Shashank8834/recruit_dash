@@ -1,5 +1,6 @@
 const { generateJson } = require('./llm');
 const { clip } = require('./classifier');
+const { parse: parseSalary } = require('./salary');
 
 /**
  * Pulls structured fields out of an uploaded CV.
@@ -14,7 +15,7 @@ const { clip } = require('./classifier');
 // Bumped with the prompt: `backfill --reclassify` selects by version, so a CV
 // extracted under cv-v1 has no salary, domain or listing status and can be
 // found and re-run by that fact alone.
-const EXTRACTION_VERSION = 'cv-v2';
+const EXTRACTION_VERSION = 'cv-v3';
 
 // A CV's identity fields sit at the top, but total experience can only be
 // judged from the whole work history, so this budget is generous compared to
@@ -58,15 +59,13 @@ Field notes, in the order they cause mistakes:
   it is what a recruiter quotes back. If the CV gives only an EXPECTED salary,
   use that and say so in notes. If it gives neither, null — a salary is
   negotiated on, and a guessed one poisons the negotiation.
-- salary_amount: the same figure as a plain ANNUAL number, with no separators
-  and no unit. "18 LPA" is 1800000. "Rs. 22,00,000" is 2200000. "£85,000" is
-  85000. A monthly figure is multiplied by 12; an hourly rate is not
-  annualised at all — return null, because the hours are unknown. If the CV
-  states a range, use the lower end. Null whenever salary_text is null or too
-  vague to convert.
-- salary_currency: the three-letter code for salary_amount — INR, USD, GBP,
-  AED. LPA, lakhs, crores and ₹ all mean INR. Null if no currency is stated
-  or implied.
+  A monthly figure should be written as the CV writes it; say in notes that it
+  is monthly, so the reader is not misled into treating it as annual.
+- skills: what the candidate can DO — "Kubernetes", "IFRS", "treasury
+  management", "Python", "SAP FICO". Take them from the skills section and
+  from what the work history says they actually did. Not job titles, not
+  employers, not sectors, not soft qualities like "team player". Ten at most,
+  most relevant first; an empty array when the CV never says.
 - domain_expertise: the SECTORS the candidate has worked in, not their skills
   and not their job titles. "BFSI", "Manufacturing", "Healthcare", "SaaS",
   "Retail", "Logistics". Take them from who their employers are and what the
@@ -97,8 +96,7 @@ const SCHEMA = {
     qualifications: { type: 'array', items: { type: 'string' } },
     experience_years: { type: 'number' },
     salary_text: { type: 'string' },
-    salary_amount: { type: 'number' },
-    salary_currency: { type: 'string' },
+    skills: { type: 'array', items: { type: 'string' } },
     domain_expertise: { type: 'array', items: { type: 'string' } },
     company_listing_status: { type: 'string', enum: ['listed', 'unlisted'] },
     notes: {
@@ -141,44 +139,34 @@ function sanitise(data) {
     ? data.qualifications.map(text).filter(Boolean)
     : [];
 
-  // Sectors, not skills. Deduplicated case-insensitively because a model that
-  // reads two employers in the same sector will happily list it twice, and
-  // capped because a runaway list is a parse failure rather than a career.
-  const domains = [];
-  const seenDomains = new Set();
-  for (const raw of Array.isArray(data.domain_expertise) ? data.domain_expertise : []) {
-    const value = text(raw);
-    if (!value || value.length > 60) continue;
-    const key = value.toLowerCase();
-    if (seenDomains.has(key)) continue;
-    seenDomains.add(key);
-    domains.push(value);
-    if (domains.length === 8) break;
+  // Deduplicated case-insensitively because a model that reads two employers in
+  // the same sector, or a skill listed twice, will happily repeat it — and
+  // capped, because a runaway list is a parse failure rather than a career.
+  function cleanList(values, limit) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(values) ? values : []) {
+      const value = text(raw);
+      if (!value || value.length > 60) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+      if (out.length === limit) break;
+    }
+    return out;
   }
 
-  // An annual salary, or nothing. The bounds reject the two failures that
-  // actually happen: a figure read in the wrong unit ("18" for 18 lakhs, or a
-  // stray year), and a lakhs-vs-rupees confusion that inflates by 10^5. Both
-  // land far outside any real annual salary in any currency this sees, and a
-  // salary wrong by a factor of a hundred thousand is quoted to a candidate
-  // before anyone notices.
-  const salaryAmount =
-    Number.isFinite(data.salary_amount) &&
-    data.salary_amount >= 1000 &&
-    data.salary_amount <= 1e11
-      ? Math.round(data.salary_amount * 100) / 100
-      : null;
+  const domains = cleanList(data.domain_expertise, 8);
+  const skills = cleanList(data.skills, 10);
 
-  // Three letters, uppercased. A model asked for a code will sometimes answer
-  // "Rs" or "rupees"; those are not codes, and a currency column holding prose
-  // cannot be compared against anything.
-  const rawCurrency = text(data.salary_currency);
-  const salaryCurrency =
-    rawCurrency && /^[A-Za-z]{3}$/.test(rawCurrency) ? rawCurrency.toUpperCase() : null;
+  // The comparable figure is DERIVED from the string rather than asked for
+  // separately. A model given two fields for one fact will sometimes disagree
+  // with itself — "24 LPA" alongside 24 — and there is no way to tell which
+  // half is wrong. One authored value, one parse, and they cannot drift.
+  const salaryText = text(data.salary_text);
+  const salary = parseSalary(salaryText || '');
 
-  // A number with no currency is still useful — the text beside it says what it
-  // is. A currency with no number is not, and would sort as a fact about pay
-  // that carries no pay.
   const listing = text(data.company_listing_status);
   const listingStatus =
     listing && ['listed', 'unlisted'].includes(listing.toLowerCase())
@@ -195,9 +183,10 @@ function sanitise(data) {
     age,
     qualifications,
     experienceYears: years,
-    salaryText: text(data.salary_text),
-    salaryAmount,
-    salaryCurrency: salaryAmount === null ? null : salaryCurrency,
+    salaryText,
+    salaryAmount: salary.amount,
+    salaryCurrency: salary.amount === null ? null : salary.currency,
+    skills,
     domainExpertise: domains,
     companyListingStatus: listingStatus,
     notes: text(data.notes),

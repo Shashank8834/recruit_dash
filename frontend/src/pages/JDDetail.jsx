@@ -81,6 +81,10 @@ export default function JDDetail() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {/* The posting as a document, including the message it was parsed
+                from — the parsed fields are an interpretation, and the original
+                is the only record of what was actually posted. */}
+            <a className="btn" href={`/api/jds/${id}/jd.txt`}>Download JD</a>
             <button onClick={toggleStatus} disabled={savingStatus} className={jd.Status === 'open' ? 'btn-solid' : 'btn'}>
               {savingStatus ? 'Saving' : jd.Status}
             </button>

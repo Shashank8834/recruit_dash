@@ -24,12 +24,10 @@ const FIELDS = [
   { key: 'location', label: 'Location' },
   { key: 'age', label: 'Age', type: 'number' },
   { key: 'experienceYears', column: 'experience_years', label: 'Total experience (years)', type: 'number' },
-  // Salary as the CV writes it, beside the number the filters use. Both are
-  // editable: the normalisation is a model's reading of a string, and the
-  // person looking at the CV is the one who can correct it.
-  { key: 'salaryText', column: 'salary_text', label: 'Salary (as stated)' },
-  { key: 'salaryAmount', column: 'salary_amount', label: 'Salary (annual, number)', type: 'number' },
-  { key: 'salaryCurrency', column: 'salary_currency', label: 'Currency' },
+  // One salary field, as the CV states it. The comparable number the filters
+  // use is derived from this string on save — two inputs for one fact can
+  // disagree, and nothing on screen would say which of them was right.
+  { key: 'salaryText', column: 'salary_text', label: 'Current salary' },
 ];
 
 const LISTING_OPTIONS = [
@@ -146,6 +144,18 @@ export default function TalentDetail() {
               </a>
             </>
           )}
+          {/* No stored file, but text was extracted: this is a CV uploaded
+              before the document itself was kept. Offering the text beats a
+              profile with no way to read the CV at all. */}
+          {!candidate.has_file && candidate.raw_text && (
+            <a
+              className="btn"
+              href={`/api/candidates/${id}/cv.txt`}
+              title="The original file was not kept for this upload — this is the extracted text"
+            >
+              Download CV text
+            </a>
+          )}
           {dirty && (
             <button className="btn-solid" onClick={save} disabled={saving}>
               {saving ? 'Saving…' : 'Save changes'}
@@ -207,6 +217,25 @@ export default function TalentDetail() {
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
+        </label>
+
+        <label className="block">
+          <span className="micro">Skills — one per line</span>
+          <textarea
+            className="input mt-1.5 h-24 w-full"
+            value={
+              draft.skills !== undefined
+                ? draft.skills.join('\n')
+                : (candidate.skills || []).join('\n')
+            }
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                skills: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean),
+              }))
+            }
+            placeholder={'IFRS\nTreasury management'}
+          />
         </label>
 
         <label className="block">

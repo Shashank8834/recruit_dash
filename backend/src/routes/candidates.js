@@ -8,6 +8,7 @@ const cvExtractor = require('../services/cvExtractor');
 const { toCsv, filename } = require('../csv');
 const notesRepo = require('../repo/notes');
 const meetingsRepo = require('../repo/meetings');
+const { parse: parseSalary } = require('../services/salary');
 const { notesRouter } = require('./notes');
 
 /**
@@ -44,9 +45,8 @@ const EXPORT_COLUMNS = [
   // Verbatim, not the normalised number: the sheet is read by people, and
   // "18 LPA" is what they will say back to the candidate. The number beside it
   // is what the filters use.
-  { key: 'salary_text', label: 'Salary' },
-  { key: 'salary_amount', label: 'Salary (annual)' },
-  { key: 'salary_currency', label: 'Currency' },
+  { key: 'salary_text', label: 'Current salary' },
+  { key: 'skills', label: 'Skills' },
   { key: 'domain_expertise', label: 'Domain expertise' },
   { key: 'company_listing_status', label: 'Employer listed',
     map: { listed: 'Listed', unlisted: 'Unlisted' } },
@@ -64,7 +64,12 @@ function listFilters(req) {
   return {
     search: req.query.search || null,
     minExperience: req.query.minExperience ? parseFloat(req.query.minExperience) : null,
-    maxSalary: req.query.maxSalary ? parseFloat(req.query.maxSalary) : null,
+    // Typed as people write salaries, not as raw digits: "20 LPA" in a filter
+    // box should mean the same thing it means in the field it filters on.
+    salaryFrom: parseSalary(req.query.salaryFrom || '').amount,
+    salaryTo: parseSalary(req.query.salaryTo || '').amount,
+    domain: req.query.domain || null,
+    skill: req.query.skill || null,
     // Anything that is not one of the two stored values is treated as no
     // filter, rather than as a filter matching nothing — a typo in a query
     // string should not silently return an empty pool.
@@ -173,6 +178,9 @@ router.post('/manual', async (req, res) => {
     const name = text(body.name);
     if (!name) return res.status(400).json({ error: 'A name is required.' });
 
+    const salaryText = text(body.salaryText);
+    const salary = parseSalary(salaryText || '');
+
     const candidate = await candidatesRepo.create({
       entryMode: 'manual',
       rawText: '',
@@ -187,11 +195,17 @@ router.post('/manual', async (req, res) => {
       qualifications: Array.isArray(body.qualifications)
         ? body.qualifications.map((q) => String(q).trim()).filter(Boolean)
         : [],
-      salaryText: text(body.salaryText),
-      salaryAmount: numberOrNull(body.salaryAmount),
-      salaryCurrency: text(body.salaryCurrency),
+      salaryText: salaryText,
+      // Derived, not asked for. One salary field on the form, and the number
+      // the filters compare comes from it — two inputs for one fact can
+      // disagree, and nothing on screen would say which was right.
+      salaryAmount: salary.amount,
+      salaryCurrency: salary.amount === null ? null : salary.currency,
       domainExpertise: Array.isArray(body.domainExpertise)
         ? body.domainExpertise.map((d) => String(d).trim()).filter(Boolean)
+        : [],
+      skills: Array.isArray(body.skills)
+        ? body.skills.map((k) => String(k).trim()).filter(Boolean)
         : [],
       companyListingStatus: ['listed', 'unlisted'].includes(body.companyListingStatus)
         ? body.companyListingStatus
@@ -302,6 +316,36 @@ router.get('/:id/file', async (req, res) => {
       `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`
     );
     res.send(file.file_data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * The CV as plain text, always available.
+ *
+ * The stored document is the better artefact, but it only exists for CVs
+ * uploaded after the file started being kept — every earlier one has its
+ * extracted text and nothing else, and a profile with no way to read the CV at
+ * all is the state this endpoint exists to remove. A hand-entered candidate has
+ * neither, and gets a 404 rather than an empty file.
+ */
+router.get('/:id/cv.txt', async (req, res) => {
+  try {
+    const candidate = await candidatesRepo.findByExternalId(req.params.id);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+    if (!candidate.raw_text || !candidate.raw_text.trim()) {
+      return res.status(404).json({
+        error: 'No CV text for this candidate — they were entered by hand.',
+      });
+    }
+
+    const stem = (candidate.name || candidate.external_id).replace(/[^\w.-]+/g, '-');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${stem}-cv.txt"`);
+    res.send(candidate.raw_text);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

@@ -24,7 +24,7 @@ const { clip, applyConfidenceFloor } = require('./classifier');
  * someone a recruiter would have wanted to see, because they never reach the
  * model to be rescued.
  */
-const PROMPT_VERSION = 'talent-v2';
+const PROMPT_VERSION = 'talent-v3';
 
 const SHORTLIST_SIZE = parseInt(process.env.TALENT_SHORTLIST || '12', 10);
 const PROFILE_CHARS = parseInt(process.env.TALENT_PROFILE_CHARS || '600', 10);
@@ -61,7 +61,7 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
             c.current_company, c.current_designation, c.location,
             c.experience_years, c.qualifications, c.raw_text,
             c.salary_text, c.salary_amount, c.salary_currency,
-            c.domain_expertise, c.company_listing_status,
+            c.domain_expertise, c.skills, c.company_listing_status,
             ts_rank(
               to_tsvector('english',
                 coalesce(c.current_designation,'') || ' ' ||
@@ -71,6 +71,9 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
                 -- background essential"), and before this they only matched
                 -- if they also happened to appear in the CV body.
                 coalesce(c.domain_expertise::text,'') || ' ' ||
+                -- Skills are what a role asks for most directly, and before
+                -- this they only ranked if the CV body happened to repeat them.
+                coalesce(c.skills::text,'') || ' ' ||
                 coalesce(c.raw_text,'')
               ), q.tsq
             ) AS rank
@@ -138,6 +141,7 @@ async function shortlist(job, { limit = SHORTLIST_SIZE, includeWhatsapp = true }
       c.company_listing_status && `Employer is a ${c.company_listing_status} company`,
       c.location && `Location: ${c.location}`,
       c.experience_years !== null && `Experience: ${c.experience_years} years`,
+      (c.skills || []).length && `Skills: ${c.skills.join(', ')}`,
       (c.domain_expertise || []).length &&
         `Domain experience: ${c.domain_expertise.join(', ')}`,
       // The verbatim string, not the normalised number. The model reasons about

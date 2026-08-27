@@ -59,6 +59,40 @@ export function toDateTimeInput(value) {
   );
 }
 
+/**
+ * Splits a timestamp into the two halves a form edits separately.
+ *
+ * A single `datetime-local` looks tidier and is a trap: it reports an EMPTY
+ * value until BOTH halves are complete, so a half-filled date is
+ * indistinguishable from an untouched field. Anything gating on it then blocks
+ * a form the user believes they have filled in, with nothing on screen to say
+ * what is missing.
+ */
+export function splitDateTime(value) {
+  const date = toDate(value);
+  if (!date) return { date: '', time: '' };
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  };
+}
+
+/**
+ * The two halves back into what the API takes.
+ *
+ * The date is what someone actually knows when they book — the time is often
+ * "sometime that morning" — so a missing time defaults rather than blocking.
+ * No timezone suffix: this is local wall-clock time, and appending Z would
+ * move every meeting by the offset.
+ */
+export const DEFAULT_MEETING_TIME = '10:00';
+
+export function joinDateTime(date, time) {
+  if (!date) return '';
+  return `${date}T${time || DEFAULT_MEETING_TIME}`;
+}
+
 /** Whether a scheduled time has already passed. */
 export function isPast(value) {
   const date = toDate(value);

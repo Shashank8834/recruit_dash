@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import MeetingList from '../components/MeetingList';
+import { joinDateTime, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
  * Meetings booked with candidates, and where each one got to.
@@ -24,7 +25,13 @@ const VIEWS = [
   { key: 'closed', label: 'Closed', query: 'status=closed' },
 ];
 
-const BLANK = { personRef: '', jobRef: '', scheduledAt: '', subject: '', createdBy: '' };
+const BLANK = {
+  personRef: '', jobRef: '', subject: '', createdBy: '',
+  // Two fields, not one datetime-local. See joinDateTime: a single one reports
+  // an empty value until both halves are filled, so a date typed without a
+  // time reads as nothing entered at all.
+  scheduledDate: '', scheduledTime: '',
+};
 
 /**
  * Picks a person by name rather than by id.
@@ -160,6 +167,7 @@ export default function Meetings() {
   const [booking, setBooking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(BLANK);
+  const [missing, setMissing] = useState(null);
   const [roles, setRoles] = useState([]);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -199,13 +207,34 @@ export default function Meetings() {
 
   async function book(event) {
     event.preventDefault();
+
+    // Checked here and reported, rather than by disabling the button. A
+    // disabled submit that never says why is indistinguishable from a broken
+    // one: you fill the form, press it, nothing happens, and there is nothing
+    // on screen to read.
+    const gaps = [];
+    if (!form.personRef) gaps.push('who the meeting is with');
+    if (!form.subject.trim()) gaps.push('what it is about');
+    if (!form.scheduledDate) gaps.push('a date');
+    if (gaps.length) {
+      setMissing(`Still needed: ${gaps.join(', ')}.`);
+      return;
+    }
+
+    setMissing(null);
     setSaving(true);
     setError(null);
     try {
       const response = await fetch('/api/meetings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          personRef: form.personRef,
+          jobRef: form.jobRef,
+          subject: form.subject,
+          createdBy: form.createdBy,
+          scheduledAt: joinDateTime(form.scheduledDate, form.scheduledTime),
+        }),
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => null);
@@ -254,16 +283,27 @@ export default function Meetings() {
           </label>
 
           <div className="grid gap-5 sm:grid-cols-2">
-            <label className="block">
-              <span className="micro">When *</span>
-              <input
-                className="input mt-1.5 w-full"
-                type="datetime-local"
-                required
-                value={form.scheduledAt}
-                onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })}
-              />
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="micro">Date *</span>
+                <input
+                  className="input mt-1.5 w-full"
+                  type="date"
+                  value={form.scheduledDate}
+                  onChange={(e) => setForm({ ...form, scheduledDate: e.target.value })}
+                />
+              </label>
+              <label className="block">
+                <span className="micro">Time</span>
+                <input
+                  className="input mt-1.5 w-full"
+                  type="time"
+                  value={form.scheduledTime}
+                  onChange={(e) => setForm({ ...form, scheduledTime: e.target.value })}
+                  placeholder={DEFAULT_MEETING_TIME}
+                />
+              </label>
+            </div>
             <label className="block">
               <span className="micro">About which role</span>
               <select
@@ -281,11 +321,16 @@ export default function Meetings() {
             </label>
           </div>
 
+          {/* No `required` attribute anywhere on this form, deliberately.
+              Native validation aborts the submit event before onSubmit runs, so
+              the handler below never gets to say what is missing — and the one
+              field that is most often the missing one, the person, is not a
+              native input at all and would produce no browser warning either.
+              One check, in one place, reporting everything at once. */}
           <label className="block">
             <span className="micro">What the meeting is about *</span>
             <input
               className="input mt-1.5 w-full"
-              required
               value={form.subject}
               onChange={(e) => setForm({ ...form, subject: e.target.value })}
               placeholder="First round — background and expectations"
@@ -301,13 +346,16 @@ export default function Meetings() {
             />
           </label>
 
-          <button
-            className="btn-solid"
-            type="submit"
-            disabled={saving || !form.personRef || !form.subject.trim() || !form.scheduledAt}
-          >
-            {saving ? 'Booking…' : 'Book meeting'}
-          </button>
+          {missing && <div className="callout">{missing}</div>}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn-solid" type="submit" disabled={saving}>
+              {saving ? 'Booking…' : 'Book meeting'}
+            </button>
+            <p className="text-xs text-ink-3">
+              Leave the time blank and it defaults to {DEFAULT_MEETING_TIME}.
+            </p>
+          </div>
         </form>
       )}
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
 import { MeetingStatus } from '../components/MeetingList';
-import { formatDateTime, toDateTimeInput, isPast } from '../lib/utils';
+import { formatDateTime, splitDateTime, joinDateTime, isPast, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
  * One meeting, and the account of how it went.
@@ -20,7 +20,8 @@ export default function MeetingDetail() {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ subject: '', scheduledAt: '' });
+  const [draft, setDraft] = useState({ subject: '', date: '', time: '' });
+  const [missing, setMissing] = useState(null);
   const [closing, setClosing] = useState(false);
   const [outcome, setOutcome] = useState('');
 
@@ -67,8 +68,22 @@ export default function MeetingDetail() {
 
   async function saveEdits(event) {
     event.preventDefault();
-    if (!draft.subject.trim() || !draft.scheduledAt) return;
-    if (await patch({ subject: draft.subject, scheduledAt: draft.scheduledAt })) {
+
+    // Reported rather than silently refused. A submit that does nothing and
+    // says nothing is the same experience as a broken one.
+    const gaps = [];
+    if (!draft.subject.trim()) gaps.push('what it is about');
+    if (!draft.date) gaps.push('a date');
+    if (gaps.length) {
+      setMissing(`Still needed: ${gaps.join(', ')}.`);
+      return;
+    }
+
+    setMissing(null);
+    if (await patch({
+      subject: draft.subject,
+      scheduledAt: joinDateTime(draft.date, draft.time),
+    })) {
       setEditing(false);
     }
   }
@@ -123,10 +138,9 @@ export default function MeetingDetail() {
         <div className="flex flex-wrap items-center gap-3">
           <MeetingStatus meeting={meeting} />
           <button className="btn" onClick={() => {
-            setDraft({
-              subject: meeting.subject,
-              scheduledAt: toDateTimeInput(meeting.scheduled_at),
-            });
+            const when = splitDateTime(meeting.scheduled_at);
+            setDraft({ subject: meeting.subject, date: when.date, time: when.time });
+            setMissing(null);
             setEditing((e) => !e);
           }}>
             {editing ? 'Cancel edit' : 'Edit'}
@@ -154,22 +168,37 @@ export default function MeetingDetail() {
               <span className="micro">What it is about *</span>
               <input
                 className="input mt-1.5 w-full"
-                required
                 value={draft.subject}
                 onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
               />
             </label>
-            <label className="block">
-              <span className="micro">When *</span>
-              <input
-                className="input mt-1.5 w-full"
-                type="datetime-local"
-                required
-                value={draft.scheduledAt}
-                onChange={(e) => setDraft({ ...draft, scheduledAt: e.target.value })}
-              />
-            </label>
+            {/* Two inputs, not one datetime-local: see joinDateTime. A single
+                one reports nothing at all until both halves are complete. */}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="micro">Date *</span>
+                <input
+                  className="input mt-1.5 w-full"
+                  type="date"
+                  value={draft.date}
+                  onChange={(e) => setDraft({ ...draft, date: e.target.value })}
+                />
+              </label>
+              <label className="block">
+                <span className="micro">Time</span>
+                <input
+                  className="input mt-1.5 w-full"
+                  type="time"
+                  value={draft.time}
+                  onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                  placeholder={DEFAULT_MEETING_TIME}
+                />
+              </label>
+            </div>
           </div>
+
+          {missing && <div className="callout">{missing}</div>}
+
           <button className="btn-solid" type="submit" disabled={saving}>
             {saving ? 'Saving…' : 'Save meeting'}
           </button>

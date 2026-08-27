@@ -66,6 +66,19 @@ services:
       # Decides how timestamps read in the CSV exports. Containers default to
       # UTC, which shows an upload logged at 13:04 IST as 07:34.
       - TZ=${TZ:-UTC}
+      # Sign-in. Accounts are created with `npm run users -- add`; there is no
+      # sign-up page, so nothing here opens the door on its own.
+      - SESSION_DAYS=${SESSION_DAYS:-30}
+      # Set this to true ONLY once the site is served over HTTPS. On plain
+      # http a secure cookie is discarded by the browser without complaint,
+      # and the symptom is a login that appears to succeed and then 401s.
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}
+      # nginx is the one hop in front of this, and it sets X-Forwarded-For.
+      # Without this express reports nginx's own address as req.ip for every
+      # visitor, so the login throttle would count the whole internet as one
+      # client and the first fumbled password would lock everybody out.
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - LOGIN_ATTEMPT_LIMIT=${LOGIN_ATTEMPT_LIMIT:-8}
       - CV_UPLOAD_MAX_MB=${CV_UPLOAD_MAX_MB:-15}
       - CV_EXTRACT_CHARS=${CV_EXTRACT_CHARS:-12000}
       - CV_EXTRACT_OUTPUT_TOKENS=${CV_EXTRACT_OUTPUT_TOKENS:-3072}

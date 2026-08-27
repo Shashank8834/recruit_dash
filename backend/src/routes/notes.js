@@ -54,8 +54,15 @@ function notesRouter(target, resolve) {
 
       const row = await owner(req, res);
       if (!row) return;
+      // The author is the signed-in user, not a name the client sends.
+      //
+      // It used to be a free-text box beside the note, which made attribution
+      // a matter of whether somebody bothered to fill it in — and left it
+      // trivially deniable when they did, since anyone could type anyone's
+      // name. A note is a record of who learned what, so it is stamped from
+      // the session and req.body.author is ignored entirely.
       res.status(201).json(
-        await notesRepo.add(target, row.id, { body, author: text((req.body || {}).author) })
+        await notesRepo.add(target, row.id, { body, author: req.user ? req.user.name : null })
       );
     } catch (err) {
       console.error(err);

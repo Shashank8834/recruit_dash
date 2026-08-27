@@ -16,6 +16,8 @@ const reviewRoutes = require('./routes/review');
 const candidatesRoutes = require('./routes/candidates');
 const manualJobsRoutes = require('./routes/manualJobs');
 const meetingsRoutes = require('./routes/meetings');
+const authRoutes = require('./routes/auth');
+const { attachUser, requireAuth } = require('./middleware/auth');
 const sheetMirror = require('./services/sheetMirror');
 const rateLimiter = require('./services/rateLimiter');
 const llmService = require('./services/llm');
@@ -23,9 +25,55 @@ const llmService = require('./services/llm');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// The browser must send the session cookie, and a wildcard origin cannot ask
+// it to: `credentials: true` with `origin: '*'` is refused outright by every
+// browser. In production the app is served from the same origin as the API and
+// no cross-origin request happens at all; ALLOWED_ORIGINS exists for a split
+// deployment, and for the Vite dev server when it is not proxying.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map((o) => o.trim()).filter(Boolean);
+app.use(cors({
+  origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
+  credentials: true,
+}));
+
+// Behind nginx or a Docker proxy, req.ip is the proxy's address unless this is
+// set — which would key the login throttle to one address for every visitor,
+// so the first person to fumble a password locks out the whole internet.
+if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
+
 // WhatsApp messages can carry long forwarded text and base64 media metadata.
 app.use(express.json({ limit: '5mb' }));
+
+// Identifies the caller without refusing anyone. Mounted before every route so
+// that handlers which merely want to know who is asking — stamping a note with
+// its author — can read req.user without repeating the lookup.
+app.use(attachUser);
+
+// Open: the way in, and the way to ask whether you are already in.
+app.use('/api/auth', authRoutes);
+
+// --------------------------------------------------------------------------
+// Everything below needs a session
+// --------------------------------------------------------------------------
+// Applied once, to the whole /api prefix, rather than route by route. Listing
+// the protected routes individually means the next route added is public by
+// default, and public-by-default on an API holding CVs and phone numbers is a
+// mistake that will not announce itself.
+//
+// /webhook is deliberately NOT behind this: Evolution calls it machine to
+// machine with no browser and no cookie, and it carries its own shared-token
+// check. /api/health stays open below for the same reason — an uptime probe
+// cannot log in, and it reports no personal data.
+app.use('/api', (req, res, next) => {
+  // Mounted AT /api, so req.path here is the remainder of the path — '/health',
+  // not '/api/health'. Checked inside the same middleware rather than as an
+  // earlier no-op mount: express runs middleware in registration order and a
+  // pass-through registered first does not stop what comes after it from
+  // matching, so the exemption has to be the thing that decides.
+  if (req.path === '/health') return next();
+  return requireAuth(req, res, next);
+});
 
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/jds', jdsRoutes);

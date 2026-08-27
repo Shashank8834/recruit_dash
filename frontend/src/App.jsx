@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import Login from './pages/Login';
+import { useAuth } from './lib/auth';
 import Dashboard from './pages/Dashboard';
 import WhatsApp from './pages/WhatsApp';
 import JDDetail from './pages/JDDetail';
@@ -14,6 +16,19 @@ import Meetings from './pages/Meetings';
 import MeetingDetail from './pages/MeetingDetail';
 
 export default function App() {
+  const { status } = useAuth();
+
+  // Nothing at all while the session is being checked. A spinner here would
+  // flash on every load for the ~50ms the check takes, and rendering the app
+  // optimistically would fire off a screen's worth of requests that are about
+  // to 401.
+  if (status === 'checking') return null;
+
+  // Rendered INSTEAD of the routes, not as one of them. There is no path a
+  // signed-out person can type that reaches a page which loads candidate data
+  // — the routes do not exist to be matched.
+  if (status !== 'authenticated') return <Login />;
+
   return (
     <Layout>
       <Routes>

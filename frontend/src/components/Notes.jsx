@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { formatDateTime } from '../lib/utils';
+import { useAuth } from '../lib/auth';
 
 /**
  * Notes on whatever record the page is showing.
@@ -13,6 +14,11 @@ import { formatDateTime } from '../lib/utils';
  * Each note keeps its own date and author, because a note without a date is a
  * claim with no shelf life: "wants 20% more" reads very differently a year on.
  *
+ * The author is whoever is signed in, and the server stamps it — there is no
+ * field for it here any more. Typed by hand it was optional in practice, so
+ * half the notes ended up anonymous, and the other half were only as truthful
+ * as whoever filled the box in.
+ *
  * @param {string} basePath  the record's API path, e.g. `/api/roles/ROLE_1001`.
  *   Notes hang off `${basePath}/notes` on every entity, which is what lets one
  *   component serve all four.
@@ -21,8 +27,8 @@ import { formatDateTime } from '../lib/utils';
  * @param {string} [placeholder]  an example note that suits this record type
  */
 export default function Notes({ basePath, notes = [], onChange, placeholder }) {
+  const { user } = useAuth();
   const [draft, setDraft] = useState('');
-  const [author, setAuthor] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -56,7 +62,9 @@ export default function Notes({ basePath, notes = [], onChange, placeholder }) {
     const ok = await send(`${basePath}/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: draft, author: author.trim() || null }),
+      // No author: the server takes it from the session and ignores anything
+      // sent here, so sending one would only suggest it were possible.
+      body: JSON.stringify({ body: draft }),
     });
     if (ok) setDraft('');
   }
@@ -144,13 +152,9 @@ export default function Notes({ basePath, notes = [], onChange, placeholder }) {
           onChange={(e) => setDraft(e.target.value)}
           placeholder={placeholder || 'Add a note…'}
         />
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            className="input w-48"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder="Your name (optional)"
-          />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Said before the note is written, not discovered after it is. */}
+          <p className="mono">{user ? `Signing as ${user.name}` : ''}</p>
           <button className="btn-solid" type="submit" disabled={busy || !draft.trim()}>
             {busy ? 'Saving…' : 'Add note'}
           </button>

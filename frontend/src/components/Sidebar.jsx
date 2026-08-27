@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../lib/auth';
 
 /**
  * Two groups, not one list.
@@ -77,6 +78,7 @@ const groups = [
 ];
 
 export default function Sidebar({ open, onClose, dark, onToggleDark }) {
+  const { user, signOut } = useAuth();
   const [reviewCount, setReviewCount] = useState(0);
 
   // Both counts only matter if you notice them climbing, so keep them live.
@@ -160,7 +162,24 @@ export default function Sidebar({ open, onClose, dark, onToggleDark }) {
         ))}
       </nav>
 
-      <div className="border-t border-rule px-5 py-4">
+      <div className="space-y-3 border-t border-rule px-5 py-4">
+        {/* Who you are signed in as, above the way out. Worth showing rather
+            than tucking behind a menu: notes are stamped with this name, so
+            it should be visible before you write one, not discovered after. */}
+        {user && (
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="truncate text-[13px] font-medium text-ink" title={user.email}>
+              {user.name}
+            </p>
+            <button
+              onClick={signOut}
+              className="shrink-0 text-[11px] font-semibold uppercase tracking-micro text-ink-2 transition-colors hover:text-ink"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
+
         <button
           onClick={onToggleDark}
           className="flex w-full items-center gap-2.5 text-[11px] font-semibold uppercase tracking-micro text-ink-2 transition-colors hover:text-ink"

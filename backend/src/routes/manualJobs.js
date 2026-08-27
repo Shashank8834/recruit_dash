@@ -8,6 +8,21 @@ const notesRepo = require('../repo/notes');
 const meetingsRepo = require('../repo/meetings');
 const { notesRouter } = require('./notes');
 const jdDocument = require('../services/jdDocument');
+const multer = require('multer');
+
+/**
+ * The JD document for a role.
+ *
+ * Memory storage, as the CV uploads use: the bytes go straight into the row in
+ * the same request, so staging them on the API container's disk would only
+ * create something to clean up — and a file left there outlives no deploy,
+ * while the row pointing at it would.
+ */
+const MAX_JD_UPLOAD_MB = parseInt(process.env.JD_UPLOAD_MAX_MB || '15', 10);
+const uploadJd = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_JD_UPLOAD_MB * 1024 * 1024, files: 1 },
+});
 
 /**
  * Roles a recruiter writes by hand, and the candidate suggestions for them.
@@ -225,6 +240,83 @@ router.get('/:id/export.csv', async (req, res) => {
       `attachment; filename="${filename(`matches-${job.external_id}`)}"`
     );
     res.send(toCsv(SUGGEST_COLUMNS, rows));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Attaches the JD document, or replaces the one already there.
+ *
+ * A role written by hand has a description field and nothing else; the actual
+ * spec the client sent is the artefact you want in front of you when briefing
+ * someone, and it had nowhere to live.
+ */
+router.post('/:id/file', uploadJd.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded. Send it as "file".' });
+    }
+
+    const updated = await manualJobsRepo.attachFile(req.params.id, {
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      fileData: req.file.buffer,
+      uploadedBy: (req.body && req.body.uploadedBy) || null,
+    });
+    if (!updated) return res.status(404).json({ error: 'Role not found' });
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * The stored JD, to read in the browser or save.
+ *
+ * `?download=1` forces the save dialog; without it a PDF opens in the built-in
+ * viewer, which is the point — checking one line against the spec should not
+ * mean a trip through the downloads folder.
+ *
+ * Only PDFs are served inline. Everything else is an attachment regardless of
+ * what was asked for, because inline means the browser renders an uploaded
+ * file on this app's origin, and a document that turns out to be HTML would
+ * then be running as part of the dashboard. nosniff is what makes that hold:
+ * the stored mime type came from the uploading client and can claim anything.
+ */
+router.get('/:id/file', async (req, res) => {
+  try {
+    const file = await manualJobsRepo.fileFor(req.params.id);
+    if (!file) return res.status(404).json({ error: 'No JD file stored for this role.' });
+
+    const type = file.mime_type || 'application/octet-stream';
+    const inline = type === 'application/pdf' && req.query.download !== '1';
+    // Quoted and stripped of quotes/newlines: the name comes from whatever the
+    // uploader's machine called it, and it is going into a header.
+    const safeName = (file.file_name || 'jd').replace(/["\r\n\\]/g, '_');
+
+    res.setHeader('Content-Type', type);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'Content-Disposition',
+      `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`
+    );
+    res.send(file.file_data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Removes the attached JD. The role itself is untouched. */
+router.delete('/:id/file', async (req, res) => {
+  try {
+    const removed = await manualJobsRepo.removeFile(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'No JD file stored for this role.' });
+    res.json({ deleted: req.params.id });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

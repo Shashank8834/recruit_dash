@@ -16,6 +16,16 @@ const notesRepo = require('./notes');
  */
 const STAGES = ['open', 'reviewing', 'placed', 'closed'];
 
+/**
+ * Whether a JD document is attached — never the document itself.
+ *
+ * The bytes live in manual_job_files precisely so that a list of roles does
+ * not carry them (see migration 011). This is the part a list actually needs:
+ * whether there is something to open.
+ */
+const HAS_FILE = `
+  (EXISTS (SELECT 1 FROM manual_job_files f WHERE f.manual_job_id = j.id)) AS has_file`;
+
 async function create({ title, company, location, description, requirements, minExperienceYears, createdBy }) {
   const { rows } = await query(
     `INSERT INTO manual_jobs
@@ -46,7 +56,8 @@ async function list({ status } = {}) {
             (SELECT COUNT(*)::int FROM job_match_suggestions s
               WHERE s.manual_job_id = j.id AND s.verdict IN ('STRONG','PARTIAL')
             ) AS match_count,
-            ${notesRepo.countSubquery('role', 'j')} AS note_count
+            ${notesRepo.countSubquery('role', 'j')} AS note_count,
+            ${HAS_FILE}
        FROM manual_jobs j
       WHERE ($1::text IS NULL OR j.status = $1)
       -- Stage first, newest within it. Sorted by date alone, a role closed
@@ -69,7 +80,65 @@ async function countsByStage() {
 }
 
 async function findByExternalId(externalId) {
-  const { rows } = await query('SELECT * FROM manual_jobs WHERE external_id = $1', [externalId]);
+  const { rows } = await query(
+    `SELECT j.*, ${HAS_FILE} FROM manual_jobs j WHERE j.external_id = $1`,
+    [externalId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * The JD document itself. Read only when somebody asks to open it, which is
+ * the whole reason the bytes live in their own table — see 011.
+ */
+async function fileFor(externalId) {
+  const { rows } = await query(
+    `SELECT f.file_name, f.file_size, f.mime_type, f.file_data
+       FROM manual_job_files f
+       JOIN manual_jobs j ON j.id = f.manual_job_id
+      WHERE j.external_id = $1`,
+    [externalId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Attaches a JD, or replaces the one already there.
+ *
+ * An upsert rather than an insert: the primary key is the role, so re-uploading
+ * overwrites instead of leaving two documents nobody can tell apart. Replacing
+ * a JD is the common case — the client sends a revised spec — and it must not
+ * be a delete followed by an upload that might not arrive.
+ */
+async function attachFile(externalId, { fileName, fileSize, mimeType, fileData, uploadedBy }) {
+  const role = await findByExternalId(externalId);
+  if (!role) return null;
+
+  await query(
+    `INSERT INTO manual_job_files
+       (manual_job_id, file_name, file_size, mime_type, file_data, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (manual_job_id) DO UPDATE
+        SET file_name   = EXCLUDED.file_name,
+            file_size   = EXCLUDED.file_size,
+            mime_type   = EXCLUDED.mime_type,
+            file_data   = EXCLUDED.file_data,
+            uploaded_by = EXCLUDED.uploaded_by,
+            updated_at  = now()`,
+    [role.id, fileName, fileSize ?? null, mimeType || null, fileData, uploadedBy || null]
+  );
+  return findByExternalId(externalId);
+}
+
+/** Removes the attached JD, leaving the role itself alone. */
+async function removeFile(externalId) {
+  const { rows } = await query(
+    `DELETE FROM manual_job_files f
+      USING manual_jobs j
+      WHERE j.id = f.manual_job_id AND j.external_id = $1
+      RETURNING f.manual_job_id`,
+    [externalId]
+  );
   return rows[0] || null;
 }
 
@@ -213,5 +282,6 @@ async function suggestionsFor(manualJobId) {
 module.exports = {
   STAGES,
   create, list, countsByStage, findByExternalId, update, remove,
+  fileFor, attachFile, removeFile,
   recordSuggestion, suggestionsFor,
 };

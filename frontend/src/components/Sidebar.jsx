@@ -78,23 +78,15 @@ const groups = [
 
 export default function Sidebar({ open, onClose, dark, onToggleDark }) {
   const [reviewCount, setReviewCount] = useState(0);
-  const [meetingCount, setMeetingCount] = useState(0);
 
   // Both counts only matter if you notice them climbing, so keep them live.
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       try {
-        const [review, meetings] = await Promise.all([
-          fetch('/api/review/count').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/meetings/summary').then((r) => (r.ok ? r.json() : null)),
-        ]);
+        const review = await fetch('/api/review/count').then((r) => (r.ok ? r.json() : null));
         if (cancelled) return;
         if (review) setReviewCount(review.count);
-        // Meetings whose date has passed and were never closed. Not the count
-        // of upcoming ones: a badge should mean "something is waiting for
-        // you", and a meeting next Tuesday is not.
-        if (meetings) setMeetingCount(meetings.overdue);
       } catch {
         // A transient fetch failure shouldn't surface in the nav.
       }
@@ -104,7 +96,7 @@ export default function Sidebar({ open, onClose, dark, onToggleDark }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
-  const badges = { review: reviewCount, meetings: meetingCount };
+  const badges = { review: reviewCount };
 
   return (
     <aside

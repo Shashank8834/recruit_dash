@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
-import MeetingList from '../components/MeetingList';
+import MeetingList, { MeetingCadence } from '../components/MeetingList';
+import FileAttach from '../components/FileAttach';
 import { formatDate } from '../lib/utils';
 
 /**
@@ -156,6 +157,19 @@ export default function TalentDetail() {
               Download CV text
             </a>
           )}
+          {/* Attach one where there is none, or swap in a newer version.
+              Re-read rather than patched into state: the response carries the
+              whole candidate, and has_file has to flip for the buttons above
+              to appear. The extracted fields are deliberately left alone — see
+              the repo — so nothing typed by hand is overwritten by a model's
+              reading of a file that was only meant to be filed. */}
+          <FileAttach
+            basePath={`/api/candidates/${id}`}
+            hasFile={candidate.has_file}
+            label="CV"
+            accept=".pdf,.doc,.docx,.txt,.rtf"
+            onDone={load}
+          />
           {dirty && (
             <button className="btn-solid" onClick={save} disabled={saving}>
               {saving ? 'Saving…' : 'Save changes'}
@@ -292,6 +306,14 @@ export default function TalentDetail() {
             {(candidate.meetings || []).length > 0 ? 'Book another' : 'Book one'}
           </Link>
         </div>
+        {/* Stated above the table rather than left to be read off it. The
+            table is in date order, so "when did we last meet" is answerable
+            from it — but only by scanning past everything still upcoming. */}
+        <MeetingCadence
+          last={candidate.last_meeting_at}
+          next={candidate.next_meeting_at}
+          total={candidate.meeting_count}
+        />
         <MeetingList
           meetings={candidate.meetings || []}
           hidePerson

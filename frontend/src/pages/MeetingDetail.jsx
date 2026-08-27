@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
-import { MeetingStatus, MeetingSequence } from '../components/MeetingList';
-import { formatDateTime, splitDateTime, joinDateTime, isPast, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
+import { MeetingSequence, MeetingCadence } from '../components/MeetingList';
+import { formatDateTime, formatRelative, daysBetween, splitDateTime, joinDateTime, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
  * One meeting, and the account of how it went.
  *
- * Three things share this page because they are three parts of one story: the
- * booking (who, when, what for), the running notes (rescheduled, second round
- * asked for, went quiet), and the conclusion. Read top to bottom it is the
- * history of a conversation — which is the thing that otherwise lives in one
- * person's head and leaves with them.
+ * Read top to bottom it is the history of a conversation: who it was with and
+ * when, where it sits in the sequence of meetings with them, and then the
+ * notes — rescheduled, second round asked for, went quiet, how it actually
+ * went. That is the thing which otherwise lives in one person's head and
+ * leaves with them.
  */
 export default function MeetingDetail() {
   const { id } = useParams();
@@ -22,8 +22,6 @@ export default function MeetingDetail() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ subject: '', date: '', time: '' });
   const [missing, setMissing] = useState(null);
-  const [closing, setClosing] = useState(false);
-  const [outcome, setOutcome] = useState('');
   // Every other meeting with the same person. Fetched separately from the
   // meeting itself because it is a fact about them rather than about this
   // record, and because it has to be re-read when this meeting is rescheduled
@@ -36,10 +34,7 @@ export default function MeetingDetail() {
         if (!r.ok) throw new Error(r.status === 404 ? 'Meeting not found' : `Server error ${r.status}`);
         return r.json();
       })
-      .then((d) => {
-        setMeeting(d);
-        setOutcome(d.outcome || '');
-      })
+      .then(setMeeting)
       .catch((e) => setError(e.message));
   }, [id]);
 
@@ -107,15 +102,6 @@ export default function MeetingDetail() {
     }
   }
 
-  async function close() {
-    // The outcome travels with the close. They are one act — "how did it go" is
-    // the question closing answers — and sending them separately leaves a
-    // moment where the meeting is concluded with no record of how.
-    if (await patch({ status: 'closed', outcome: outcome.trim() || null })) {
-      setClosing(false);
-    }
-  }
-
   async function remove() {
     if (!window.confirm('Delete this meeting and its notes? This cannot be undone.')) return;
     try {
@@ -139,7 +125,17 @@ export default function MeetingDetail() {
     : meeting.person_source === 'candidate'
       ? `/talent/${meeting.person_ref}`
       : `/candidates/${meeting.person_ref}`;
-  const overdue = meeting.status === 'open' && isPast(meeting.scheduled_at);
+
+  // The gap between this meeting and the one before it in the sequence. Null
+  // when this is the first, or when the siblings have not loaded yet.
+  const previous = siblings && meeting.person_meeting_number > 1
+    ? (siblings.meetings || []).find(
+        (m) => m.person_meeting_number === meeting.person_meeting_number - 1
+      )
+    : null;
+  const gapFromPrevious = previous
+    ? daysBetween(previous.scheduled_at, meeting.scheduled_at)
+    : null;
 
   return (
     <div className="space-y-8">
@@ -151,12 +147,23 @@ export default function MeetingDetail() {
           <h1 className="page-title mt-1">{meeting.subject}</h1>
           <p className="page-sub">
             {formatDateTime(meeting.scheduled_at)}
+            <span className="text-ink-2"> · {formatRelative(meeting.scheduled_at)}</span>
             {meeting.created_by ? ` · booked by ${meeting.created_by}` : ''}
+          </p>
+          {/* Booked and last-updated, said plainly. Without them there is no
+              way to tell a meeting arranged months ago from one added this
+              morning, and the two mean different things when the date has
+              passed and nobody has closed it. */}
+          <p className="mono mt-1">
+            Booked {formatRelative(meeting.created_at)}
+            {meeting.updated_at !== meeting.created_at
+              ? ` · last changed ${formatRelative(meeting.updated_at)}`
+              : ''}
+            {meeting.closed_at ? ` · closed ${formatRelative(meeting.closed_at)}` : ''}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <MeetingSequence meeting={meeting} />
-          <MeetingStatus meeting={meeting} />
           <button className="btn" onClick={() => {
             const when = splitDateTime(meeting.scheduled_at);
             setDraft({ subject: meeting.subject, date: when.date, time: when.time });
@@ -170,16 +177,6 @@ export default function MeetingDetail() {
       </header>
 
       {error && <div className="notice-error">{error}</div>}
-
-      {/* Said plainly rather than left to be inferred from the date: an open
-          meeting whose date has passed is the only state here that needs
-          someone to do something. */}
-      {overdue && (
-        <div className="callout">
-          This meeting&apos;s date has passed and it was never closed. Record how it went
-          below, or reschedule it.
-        </div>
-      )}
 
       {editing && (
         <form onSubmit={saveEdits} className="panel space-y-5">
@@ -257,6 +254,16 @@ export default function MeetingDetail() {
           {meeting.person_phone && <p className="text-sm text-ink-2">{meeting.person_phone}</p>}
           {meeting.person_email && <p className="text-sm text-ink-2">{meeting.person_email}</p>}
 
+          {siblings && (
+            <div className="pt-1">
+              <MeetingCadence
+                last={siblings.lastMeetingAt}
+                next={siblings.nextMeetingAt}
+                total={siblings.total}
+              />
+            </div>
+          )}
+
           {/* Straight into the booking form with them already tagged. Meeting
               the same person again is the common next step from this page —
               a second round, a client round — and sending someone back to the
@@ -295,7 +302,7 @@ export default function MeetingDetail() {
       {/* The other meetings with the same person.
           A placement is rarely one conversation — first round, client round,
           offer — and each of those is its own record with its own notes and
-          its own outcome. Without this they are only findable by going back to
+          its own notes. Without this they are only findable by going back to
           the list and searching the name, so the sequence they form is invisible
           from inside any one of them. */}
       {siblings && siblings.total > 1 && (
@@ -305,9 +312,21 @@ export default function MeetingDetail() {
               All {siblings.total} meetings with {meeting.person_name || 'this person'}
             </p>
             <p className="text-xs text-ink-2">
-              {siblings.closed} concluded · {siblings.open} open
+              {siblings.held} already held · {siblings.upcoming} still to come
             </p>
           </div>
+
+          {/* How long it had been since the one before. The number that says
+              whether this was a follow-up or a restart — found by sequence
+              rather than by list position, because the list puts open meetings
+              first and "the previous one" is a fact about the dates. */}
+          {gapFromPrevious !== null && (
+            <p className="text-sm text-ink-2">
+              {gapFromPrevious === 0
+                ? 'Same day as the previous meeting.'
+                : `${gapFromPrevious} day${gapFromPrevious === 1 ? '' : 's'} after the previous meeting.`}
+            </p>
+          )}
 
           <ul className="border border-rule">
             {siblings.meetings.map((other) => {
@@ -328,6 +347,9 @@ export default function MeetingDetail() {
                   </span>
                   <span className="whitespace-nowrap text-xs text-ink-2">
                     {formatDateTime(other.scheduled_at)}
+                    <span className="ml-2 text-ink-3">
+                      {formatRelative(other.scheduled_at)}
+                    </span>
                   </span>
                   {current ? (
                     <span className="flex-1 truncate font-semibold text-ink">
@@ -347,7 +369,6 @@ export default function MeetingDetail() {
                       {other.note_count} note{other.note_count === 1 ? '' : 's'}
                     </span>
                   )}
-                  <MeetingStatus meeting={other} />
                 </li>
               );
             })}
@@ -355,51 +376,9 @@ export default function MeetingDetail() {
         </section>
       )}
 
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-ink pb-2">
-          <p className="micro">Outcome</p>
-          {meeting.status === 'closed' ? (
-            <button className="btn" disabled={saving} onClick={() => patch({ status: 'open' })}>
-              {saving ? '…' : 'Reopen'}
-            </button>
-          ) : (
-            <button className="btn-solid" onClick={() => setClosing((c) => !c)}>
-              {closing ? 'Cancel' : 'Close meeting'}
-            </button>
-          )}
-        </div>
-
-        {meeting.status === 'closed' ? (
-          <div className="space-y-2">
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
-              {meeting.outcome || 'Closed with no outcome recorded.'}
-            </p>
-            <p className="mono">Closed {formatDateTime(meeting.closed_at)}</p>
-          </div>
-        ) : closing ? (
-          <div className="space-y-3 border border-rule px-4 py-4">
-            <label className="block">
-              <span className="micro">How did it go?</span>
-              <textarea
-                className="input mt-1.5 h-28 w-full"
-                value={outcome}
-                onChange={(e) => setOutcome(e.target.value)}
-                placeholder="Strong on the technical side, wants 30 LPA. Sending to the client."
-              />
-            </label>
-            <button className="btn-solid" onClick={close} disabled={saving}>
-              {saving ? 'Closing…' : 'Close meeting'}
-            </button>
-          </div>
-        ) : (
-          <p className="text-sm text-ink-3">
-            Still open. Close it when the conversation is concluded, and record how it went.
-          </p>
-        )}
-      </section>
-
-      {/* The timeline. The fields above say when it is and how it ended; these
-          are what happened in between. */}
+      {/* The record of the meeting. The fields above say who and when; this
+          is everything that actually happened — including how it went, which
+          used to live in an "outcome" field of its own and is just a note. */}
       <Notes
         basePath={`/api/meetings/${id}`}
         notes={meeting.notes || []}

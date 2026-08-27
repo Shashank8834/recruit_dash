@@ -57,6 +57,12 @@ const EXPORT_COLUMNS = [
   // Requested explicitly: the notes are most of why a spreadsheet gets read a
   // second time, and an export without them is a list of strangers.
   { key: 'notes', label: 'Notes' },
+  // When they were last seen and when they are next due. In a spreadsheet
+  // these are what turn a list of names into a worklist: sort by "Last met"
+  // and the people who have gone quiet come to the top.
+  { key: 'meeting_count', label: 'Meetings' },
+  { key: 'last_meeting_at', label: 'Last met' },
+  { key: 'next_meeting_at', label: 'Next meeting' },
   { key: 'created_at', label: 'Added' },
 ];
 
@@ -270,6 +276,49 @@ router.get('/:id', async (req, res) => {
       meetingsRepo.list({ candidateId: candidate.id }),
     ]);
     res.json({ ...candidate, notes, meetings });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Attaches a CV to a candidate that has none, or replaces the one on file.
+ *
+ * Separate from the bulk POST / that creates candidates from CVs, because this
+ * is the opposite direction: the person already exists — entered by hand, or
+ * uploaded before the file itself was kept — and the document is what is
+ * missing. Extraction is deliberately not re-run; see the repo function.
+ *
+ * upload.single, not array: one CV belongs to one candidate, and accepting
+ * several here would leave no answer to which of them is now their CV.
+ */
+router.post('/:id/file', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded. Send it as "file".' });
+    }
+
+    const candidate = await candidatesRepo.findByExternalId(req.params.id);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    // Text is extracted only to fill an empty raw_text, so a hand-entered
+    // candidate gains the text view. A failure here is not a failed upload:
+    // the document is the thing being attached, and it is stored either way.
+    let rawText = null;
+    try {
+      rawText = await media.extractText(req.file.buffer, req.file.mimetype, req.file.originalname);
+    } catch (err) {
+      console.error('[candidates] text extraction failed on attach:', err.message);
+    }
+
+    res.json(await candidatesRepo.attachFile(req.params.id, {
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      fileData: req.file.buffer,
+      rawText,
+    }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

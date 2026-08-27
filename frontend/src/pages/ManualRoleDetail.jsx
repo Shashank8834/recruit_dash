@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import Notes from '../components/Notes';
 import MeetingList from '../components/MeetingList';
+import FileAttach from '../components/FileAttach';
 import { STAGES, StageTag } from '../components/RoleStage';
 import { formatDate } from '../lib/utils';
 
@@ -245,7 +246,34 @@ export default function ManualRoleDetail() {
           {/* The role as a document, to send to a client or a candidate. The
               same text the matcher scored against, so what people receive
               cannot drift from what the tool ranked on. */}
-          <a className="btn" href={`/api/roles/${id}/jd.txt`}>Download JD</a>
+          <a className="btn" href={`/api/roles/${id}/jd.txt`}>Download JD text</a>
+
+          {/* The JD as it was actually sent to us — the client's own file.
+              Distinct from the text above, which is what was typed into this
+              page: the two are not the same document and the one you forward
+              to a candidate is usually this one. */}
+          {role.has_file && (
+            <>
+              <a
+                className="btn"
+                href={`/api/roles/${id}/file`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View JD file
+              </a>
+              <a className="btn" href={`/api/roles/${id}/file?download=1`}>
+                Download JD file
+              </a>
+            </>
+          )}
+          <FileAttach
+            basePath={`/api/roles/${id}`}
+            hasFile={role.has_file}
+            label="JD file"
+            accept=".pdf,.doc,.docx,.txt,.rtf"
+            onDone={load}
+          />
           <button className="btn" onClick={() => setEditing((e) => !e)}>
             {editing ? 'Cancel edit' : 'Edit'}
           </button>

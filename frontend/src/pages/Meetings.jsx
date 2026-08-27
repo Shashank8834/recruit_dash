@@ -1,29 +1,18 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import MeetingList, { MeetingStatus } from '../components/MeetingList';
-import { joinDateTime, formatDateTime, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
+import MeetingList, { MeetingCadence } from '../components/MeetingList';
+import { joinDateTime, formatDateTime, formatRelative, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
 
 /**
- * Meetings booked with candidates, and where each one got to.
+ * Meetings booked with candidates, in date order.
  *
- * A meeting is not a note with a date on it. It is arranged before it happens,
- * it has a state that changes, and it ends with an outcome that does not exist
- * when it is created — so it needs a record of its own, or nobody can answer
- * "who am I seeing on Thursday" and "which conversations did I never close".
+ * A meeting is a record of its own rather than a note with a date on it: it is
+ * arranged before it happens, it belongs to a person you will meet again, and
+ * what was said in it has to survive the person who was in the room.
  *
- * Those two questions are what the filters are for. Everything else is the
- * running account on each meeting's own page.
+ * There is no status. A meeting either has happened or has not, which its date
+ * already says, and everything that came out of it is in its notes.
  */
-
-const VIEWS = [
-  { key: '', label: 'All' },
-  { key: 'open', label: 'Open', query: 'status=open' },
-  { key: 'upcoming', label: 'Upcoming', query: 'status=open&when=upcoming' },
-  // Open and already past: a conversation that happened and was never
-  // concluded. The one view that is a to-do list rather than a record.
-  { key: 'needs-closing', label: 'Needs closing', query: 'status=open&when=past' },
-  { key: 'closed', label: 'Closed', query: 'status=closed' },
-];
 
 const BLANK = {
   personRef: '', jobRef: '', subject: '', createdBy: '',
@@ -187,20 +176,21 @@ function PersonHistory({ history, loading }) {
 
   return (
     <div className="border border-ink">
-      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-rule px-4 py-3">
-        <p className="text-sm font-semibold text-ink">
-          {history.total} meeting{history.total === 1 ? '' : 's'} already with this person
-        </p>
-        <p className="text-xs text-ink-2">
-          {history.closed} concluded · {history.upcoming} still to happen
-          {/* Named separately from "open", because an open meeting whose date
-              has passed is not pending — it is unfinished, and booking another
-              on top of it is usually not what was intended. */}
-          {history.overdue > 0 ? ` · ${history.overdue} never closed` : ''}
-        </p>
-        <p className="mono ml-auto">
-          This will be their {ordinal(history.nextNumber)}
-        </p>
+      <div className="space-y-2 border-b border-rule px-4 py-3">
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+          <p className="text-sm font-semibold text-ink">
+            {history.total} meeting{history.total === 1 ? '' : 's'} already with this person
+          </p>
+          <p className="text-xs text-ink-2">
+            {history.held} already held · {history.upcoming} still to come
+          </p>
+          <p className="mono ml-auto">
+            This will be their {ordinal(history.nextNumber)}
+          </p>
+        </div>
+        {/* The question actually being asked at this moment is "when did I last
+            see them", and a list of five dates is not an answer to it. */}
+        <MeetingCadence last={history.lastMeetingAt} next={history.nextMeetingAt} />
       </div>
 
       <ul className="max-h-48 overflow-y-auto">
@@ -214,6 +204,7 @@ function PersonHistory({ history, loading }) {
             </span>
             <span className="whitespace-nowrap text-xs text-ink-2">
               {formatDateTime(meeting.scheduled_at)}
+              <span className="ml-2 text-ink-3">{formatRelative(meeting.scheduled_at)}</span>
             </span>
             <Link
               to={`/meetings/${meeting.external_id}`}
@@ -222,24 +213,16 @@ function PersonHistory({ history, loading }) {
             >
               {meeting.subject}
             </Link>
-            <MeetingStatus meeting={meeting} />
           </li>
         ))}
       </ul>
 
-      {history.overdue > 0 && (
-        <p className="border-t border-rule px-4 py-2 text-xs text-ink-2">
-          One of these was never closed. Recording how it went keeps the sequence
-          readable — but booking the next one now is fine either way.
-        </p>
-      )}
     </div>
   );
 }
 
 export default function Meetings() {
   const [meetings, setMeetings] = useState([]);
-  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [booking, setBooking] = useState(false);
@@ -252,7 +235,6 @@ export default function Meetings() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const view = VIEWS.some((v) => v.key === params.get('view')) ? params.get('view') : '';
   // ?book=CAND_1004 — arriving from a person's page or from a meeting with
   // them, wanting the next one. Read once into the form rather than kept as
   // the source of truth, so clearing the person in the picker actually clears
@@ -264,23 +246,21 @@ export default function Meetings() {
   const search = params.get('q') || '';
   const [term, setTerm] = useState(search);
 
+  // The search is the only filter now, so the query string is just it.
   const query = useMemo(() => {
-    const built = new URLSearchParams((VIEWS.find((v) => v.key === view) || {}).query || '');
+    const built = new URLSearchParams();
     if (search.trim()) built.set('search', search.trim());
     return built.toString();
-  }, [view, search]);
+  }, [search]);
 
-  // Both the view and the search live in the URL, so changing one must carry
-  // the other. Written as one function because the two call sites had each
-  // dropped the other's parameter when they set their own.
   const setQuery = useCallback((next) => {
-    const merged = { view, q: search, ...next };
+    const merged = { q: search, ...next };
     const cleaned = {};
     for (const [key, value] of Object.entries(merged)) {
       if (value) cleaned[key] = value;
     }
     setParams(cleaned, { replace: true });
-  }, [view, search, setParams]);
+  }, [search, setParams]);
 
   // 300ms, matching the person picker. Skipped when the draft already equals
   // what is committed, so arriving on the page with ?q= in the URL does not
@@ -293,16 +273,13 @@ export default function Meetings() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([
-      fetch(`/api/meetings?${query}`).then((r) => {
+    fetch(`/api/meetings?${query}`)
+      .then((r) => {
         if (!r.ok) throw new Error(`Server error ${r.status}`);
         return r.json();
-      }),
-      fetch('/api/meetings/summary').then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([rows, counts]) => {
+      })
+      .then((rows) => {
         setMeetings(Array.isArray(rows) ? rows : []);
-        if (counts) setSummary(counts);
         setLoading(false);
       })
       .catch((e) => { setError(e.message); setLoading(false); });
@@ -421,7 +398,7 @@ export default function Meetings() {
           <p className="micro">Managed here</p>
           <h1 className="page-title mt-1">Meetings</h1>
           <p className="page-sub">
-            Who you are seeing, what it is about, and how each conversation ended.
+            Who you are seeing, when, and what was said. The record of each one is in its notes.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -535,30 +512,6 @@ export default function Meetings() {
         </form>
       )}
 
-      {summary && (
-        <div className="grid grid-cols-2 gap-px border border-rule bg-rule sm:grid-cols-4">
-          {[
-            ['Upcoming', summary.upcoming],
-            // Underlined rather than coloured, matching how the pipeline panel
-            // marks a failure: this is the number that means work is pending.
-            ['Needs closing', summary.overdue, true],
-            ['Closed', summary.closed],
-            ['Total', summary.total],
-          ].map(([label, value, mark]) => (
-            <div key={label} className="bg-paper px-4 py-4">
-              <p className="micro">{label}</p>
-              <p
-                className={`tnum mt-2 text-2xl font-bold leading-none text-ink ${
-                  mark && value > 0 ? 'underline decoration-2 underline-offset-4' : ''
-                }`}
-              >
-                {value}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Searched on the server rather than filtered in the browser: the list is
           capped at 200 rows, so filtering what arrived would search a page
           rather than the meetings, and a person met last year would not be
@@ -579,30 +532,12 @@ export default function Meetings() {
               {loading
                 ? 'Searching…'
                 : `${meetings.length} meeting${meetings.length === 1 ? '' : 's'} matching “${search}”`}
-              {view ? ' in this view' : ''}
             </span>
             <button type="button" className="btn-quiet text-xs" onClick={() => setTerm('')}>
               Clear
             </button>
           </p>
         )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-px border border-rule bg-rule">
-        {VIEWS.map((option) => (
-          <button
-            key={option.key}
-            onClick={() => setQuery({ view: option.key })}
-            className={[
-              'flex-1 px-4 py-2.5 text-[13px] font-semibold transition-colors',
-              option.key === view
-                ? 'bg-ink text-paper'
-                : 'bg-paper text-ink-2 hover:bg-surface hover:text-ink',
-            ].join(' ')}
-          >
-            {option.label}
-          </button>
-        ))}
       </div>
 
       {loading ? (
@@ -614,10 +549,8 @@ export default function Meetings() {
           meetings={meetings}
           empty={
             search
-              ? `Nobody and nothing matching “${search}”${view ? ' in this view' : ''}.`
-              : view
-                ? 'Nothing in this view.'
-                : 'No meetings yet. Book one against anyone in the talent pool.'
+              ? `Nobody and nothing matching “${search}”.`
+              : 'No meetings yet. Book one against anyone in the talent pool.'
           }
         />
       )}

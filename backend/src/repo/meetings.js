@@ -9,8 +9,6 @@ const notesRepo = require('./notes');
  * the same way, so a row always says which side of the product it came from.
  */
 
-const STATUSES = ['open', 'closed'];
-
 /**
  * The person and the role, resolved from whichever side they came from.
  *
@@ -19,8 +17,8 @@ const STATUSES = ['open', 'closed'];
  * null.
  */
 const SELECT = `
-  m.id, m.external_id, m.scheduled_at, m.subject, m.status, m.outcome,
-  m.closed_at, m.created_by, m.created_at, m.updated_at,
+  m.id, m.external_id, m.scheduled_at, m.subject,
+  m.created_by, m.created_at, m.updated_at,
   m.candidate_id, m.contact_id, m.manual_job_id,
   CASE WHEN m.candidate_id IS NOT NULL THEN 'candidate' ELSE 'applicant' END AS person_source,
   COALESCE(c.external_id, 'APP_' || cl.id)              AS person_ref,
@@ -38,8 +36,7 @@ const SELECT = `
   -- it sits rather than leaving four identically-titled rows to be told apart
   -- by their dates.
   pm.seq                                                AS person_meeting_number,
-  pm.total                                              AS person_meeting_total,
-  pm.closed                                             AS person_meetings_closed`;
+  pm.total                                              AS person_meeting_total`;
 
 const FROM = `
   FROM meetings m
@@ -67,7 +64,6 @@ const FROM = `
   -- side of the pair.
   LEFT JOIN LATERAL (
     SELECT COUNT(*)::int                                             AS total,
-           COUNT(*) FILTER (WHERE m2.status = 'closed')::int         AS closed,
            -- Ordered by the date it is set for, with the id breaking ties, so
            -- two meetings booked for the same slot still number stably.
            COUNT(*) FILTER (
@@ -116,44 +112,36 @@ const SEARCH_COLUMNS = [
   'c.email', 'ct.email',
   'c.phone', 'ct.phone',
   'c.current_company', 'c.current_designation',
-  'm.subject', 'm.external_id', 'm.outcome',
+  'm.subject', 'm.external_id',
   'j.title',
 ];
 
 /**
  * @param {object} opts
- * @param {string} [opts.status]     'open' | 'closed'
- * @param {string} [opts.when]       'upcoming' | 'past'
  * @param {string} [opts.search]     name, email, phone, subject or id
  * @param {number} [opts.candidateId]
  * @param {number} [opts.contactId]
  * @param {number} [opts.manualJobId]
  */
 async function list({
-  status, when, search, candidateId, contactId, manualJobId, limit = 200,
+  search, candidateId, contactId, manualJobId, limit = 200,
 } = {}) {
   const { rows } = await query(
     `SELECT ${SELECT}
      ${FROM}
-      WHERE ($1::text IS NULL OR m.status = $1)
-        AND ($2::text IS NULL
-             OR ($2 = 'upcoming' AND m.scheduled_at >= now())
-             OR ($2 = 'past'     AND m.scheduled_at <  now()))
-        AND ($3::bigint IS NULL OR m.candidate_id  = $3)
-        AND ($4::bigint IS NULL OR m.contact_id    = $4)
-        AND ($5::bigint IS NULL OR m.manual_job_id = $5)
-        AND ($6::text IS NULL OR (
-              ${SEARCH_COLUMNS.map((col) => `${col} ILIKE '%' || $6 || '%'`).join(' OR ')}
+      WHERE ($1::bigint IS NULL OR m.candidate_id  = $1)
+        AND ($2::bigint IS NULL OR m.contact_id    = $2)
+        AND ($3::bigint IS NULL OR m.manual_job_id = $3)
+        AND ($4::text IS NULL OR (
+              ${SEARCH_COLUMNS.map((col) => `${col} ILIKE '%' || $4 || '%'`).join(' OR ')}
             ))
-      -- Open meetings first, then soonest. A worklist answers "what do I still
-      -- have to deal with" before "what happened in the past", and sorting by
-      -- date alone buries an unclosed meeting from last month under everything
-      -- since.
-      ORDER BY CASE m.status WHEN 'open' THEN 0 ELSE 1 END,
-               m.scheduled_at DESC
-      LIMIT $7`,
-    [status || null, when || null, candidateId || null, contactId || null,
-     manualJobId || null, search || null, limit]
+      -- Plain date order, newest first. There is no longer a state that makes
+      -- one meeting more urgent than another, so the only ordering left is the
+      -- one a diary uses.
+      ORDER BY m.scheduled_at DESC
+      LIMIT $5`,
+    [candidateId || null, contactId || null, manualJobId || null,
+     search || null, limit]
   );
   return rows;
 }
@@ -181,20 +169,25 @@ async function personHistory({ candidateId, contactId }) {
     limit: 100,
   });
 
-  const closed = meetings.filter((m) => m.status === 'closed').length;
   const now = Date.now();
-  const upcoming = meetings.filter(
-    (m) => m.status === 'open' && new Date(m.scheduled_at).getTime() >= now
-  ).length;
+
+  // The two dates anybody actually asks for: when did we last see them, and
+  // when are we seeing them next.
+  const past = meetings
+    .filter((m) => new Date(m.scheduled_at).getTime() < now)
+    .map((m) => m.scheduled_at)
+    .sort();
+  const ahead = meetings
+    .filter((m) => new Date(m.scheduled_at).getTime() >= now)
+    .map((m) => m.scheduled_at)
+    .sort();
 
   return {
     total: meetings.length,
-    closed,
-    open: meetings.length - closed,
-    upcoming,
-    // Open and already past — the same "never concluded" count the summary
-    // strip uses, scoped to this person.
-    overdue: meetings.length - closed - upcoming,
+    held: past.length,
+    upcoming: ahead.length,
+    lastMeetingAt: past.length ? past[past.length - 1] : null,
+    nextMeetingAt: ahead.length ? ahead[0] : null,
     // What the next one will be numbered. Booking into the past is allowed
     // (people record meetings after the fact), and that renumbers the sequence,
     // so this is what it would be for a meeting booked from here and now.
@@ -208,7 +201,7 @@ async function upcoming(limit = 5) {
   const { rows } = await query(
     `SELECT ${SELECT}
      ${FROM}
-      WHERE m.status = 'open' AND m.scheduled_at >= now()
+      WHERE m.scheduled_at >= now()
       ORDER BY m.scheduled_at
       LIMIT $1`,
     [limit]
@@ -216,16 +209,12 @@ async function upcoming(limit = 5) {
   return rows;
 }
 
-/** Counts for the Overview: what is booked, what was never closed. */
+/** Counts for the Overview: how many are booked and how many have happened. */
 async function summary() {
   const { rows } = await query(
-    `SELECT COUNT(*)::int                                                      AS total,
-            COUNT(*) FILTER (WHERE status = 'open')::int                       AS open,
-            COUNT(*) FILTER (WHERE status = 'closed')::int                     AS closed,
-            COUNT(*) FILTER (WHERE status = 'open' AND scheduled_at >= now())::int AS upcoming,
-            -- An open meeting whose date has passed. This is the number that
-            -- matters: it is the conversation somebody had and never concluded.
-            COUNT(*) FILTER (WHERE status = 'open' AND scheduled_at < now())::int  AS overdue
+    `SELECT COUNT(*)::int                                       AS total,
+            COUNT(*) FILTER (WHERE scheduled_at >= now())::int  AS upcoming,
+            COUNT(*) FILTER (WHERE scheduled_at <  now())::int  AS held
        FROM meetings`
   );
   return rows[0];
@@ -243,19 +232,11 @@ async function findById(id) {
   return rows[0] || null;
 }
 
-/**
- * Edits a meeting, including opening and closing it.
- *
- * status and closed_at move together, because the CHECK constraint requires it
- * and because they mean one thing: closing stamps the time, reopening clears
- * it. Leaving that to the caller means every caller has to remember, and the
- * one that forgets writes a row the database rejects.
- */
+/** Edits a meeting: what it is about, when it is, and which role it is for. */
 async function update(externalId, fields) {
   const allowed = {
     subject: 'subject',
     scheduledAt: 'scheduled_at',
-    outcome: 'outcome',
     manualJobId: 'manual_job_id',
   };
 
@@ -265,18 +246,6 @@ async function update(externalId, fields) {
     if (fields[key] === undefined) continue;
     values.push(fields[key]);
     sets.push(`${column} = $${values.length}`);
-  }
-
-  if (fields.status !== undefined) {
-    values.push(fields.status);
-    sets.push(`status = $${values.length}`);
-    sets.push(
-      fields.status === 'closed'
-        // Preserved on a re-close so the original conclusion time survives
-        // someone reopening a meeting to add a note and closing it again.
-        ? 'closed_at = COALESCE(closed_at, now())'
-        : 'closed_at = NULL'
-    );
   }
 
   if (sets.length === 0) return findByExternalId(externalId);
@@ -298,7 +267,6 @@ async function remove(externalId) {
 }
 
 module.exports = {
-  STATUSES,
   create, list, upcoming, summary, personHistory,
   findByExternalId, findById, update, remove,
 };

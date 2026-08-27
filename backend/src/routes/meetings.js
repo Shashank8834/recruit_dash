@@ -33,9 +33,6 @@ const EXPORT_COLUMNS = [
   { key: 'person_email', label: 'Email' },
   { key: 'job_title', label: 'Role' },
   { key: 'subject', label: 'About' },
-  { key: 'status', label: 'Status', map: { open: 'Open', closed: 'Closed' } },
-  { key: 'outcome', label: 'Outcome' },
-  { key: 'closed_at', label: 'Closed' },
   { key: 'created_at', label: 'Created' },
 ];
 
@@ -100,8 +97,6 @@ async function resolveJob(body) {
 
 function listFilters(req) {
   return {
-    status: meetingsRepo.STATUSES.includes(req.query.status) ? req.query.status : null,
-    when: ['upcoming', 'past'].includes(req.query.when) ? req.query.when : null,
     // Free text, matched against the person's name, email and phone as well as
     // the subject and the meeting id. Trimmed here so a box left holding a
     // space does not filter everything out.
@@ -207,13 +202,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/**
- * Edits a meeting, including closing and reopening it.
- *
- * Closing takes an outcome in the same call. They are one act — "how did it
- * go" is the question closing answers — and splitting them leaves a window
- * where a meeting is concluded with no record of how.
- */
+/** Edits a meeting: what it is about, when it is, and which role it is for. */
 router.patch('/:id', async (req, res) => {
   try {
     const body = req.body || {};
@@ -232,19 +221,6 @@ router.patch('/:id', async (req, res) => {
       }
       fields.scheduledAt = scheduledAt;
     }
-
-    if (body.status !== undefined) {
-      if (!meetingsRepo.STATUSES.includes(body.status)) {
-        return res.status(400).json({
-          error: `status must be one of ${meetingsRepo.STATUSES.join(', ')}`,
-        });
-      }
-      fields.status = body.status;
-    }
-
-    // Nullable on purpose: clearing the outcome is a legitimate correction,
-    // and text() turns a blanked field into null rather than ''.
-    if (body.outcome !== undefined) fields.outcome = text(body.outcome);
 
     if (body.jobRef !== undefined) {
       const job = await resolveJob(body);

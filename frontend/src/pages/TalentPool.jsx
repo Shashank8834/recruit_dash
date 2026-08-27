@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatRelative } from '../lib/utils';
 
 /**
  * The talent pool: CVs uploaded here, and candidates typed in by hand.
@@ -395,6 +395,9 @@ export default function TalentPool() {
                 <th className="th">Contact</th>
                 <th className="th">CV</th>
                 <th className="th">Notes</th>
+                {/* The column that turns the pool into a worklist: who has
+                    been seen, how long ago, and whether anything is booked. */}
+                <th className="th">Last met</th>
                 <th className="th">Added</th>
               </tr>
             </thead>
@@ -483,6 +486,28 @@ export default function TalentPool() {
                     )}
                   </td>
                   <td className="td tnum text-xs text-ink-2">{c.note_count || '—'}</td>
+                  <td className="td whitespace-nowrap text-xs">
+                    {c.last_meeting_at ? (
+                      <>
+                        <span className="font-semibold text-ink">
+                          {formatRelative(c.last_meeting_at)}
+                        </span>
+                        <span className="block text-ink-2">
+                          {formatDate(c.last_meeting_at)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-ink-3">Never</span>
+                    )}
+                    {/* Only when something is arranged. A blank here means
+                        nothing is booked, which is the state worth seeing on
+                        somebody last met five months ago. */}
+                    {c.next_meeting_at && (
+                      <span className="mt-0.5 block text-ink-2">
+                        next {formatRelative(c.next_meeting_at)}
+                      </span>
+                    )}
+                  </td>
                   <td className="td text-xs text-ink-2">{formatDate(c.created_at)}</td>
                 </tr>
               ))}

@@ -28,6 +28,31 @@ const FIELDS = `
 const NOTES_AGGREGATE = `${notesRepo.aggregate('candidate', 'c')} AS notes`;
 const NOTE_COUNT = `${notesRepo.countSubquery('candidate', 'c')} AS note_count`;
 
+/**
+ * When this candidate was last seen and when they are next due.
+ *
+ * A talent pool sorted by "Added" answers when a CV arrived, which stops being
+ * the useful question the moment somebody has been met: from then on what
+ * matters is whether they have gone quiet. These are the two dates that say
+ * so, and they belong on the list rather than one click into each person —
+ * "who have I not spoken to since March" is a question about the whole pool.
+ *
+ * Correlated subqueries rather than a join, matching how note counts are done
+ * here already, so adding them cannot multiply rows.
+ *
+ * Split on now() rather than on status: a meeting that has happened has
+ * happened whether or not anyone closed it, and reading the last contact off
+ * an unclosed future booking would date it wrongly in the one direction that
+ * makes somebody look attended-to when they are not.
+ */
+const MEETING_DATES = `
+  (SELECT COUNT(*)::int FROM meetings m WHERE m.candidate_id = c.id)
+    AS meeting_count,
+  (SELECT MAX(m.scheduled_at) FROM meetings m
+    WHERE m.candidate_id = c.id AND m.scheduled_at <  now()) AS last_meeting_at,
+  (SELECT MIN(m.scheduled_at) FROM meetings m
+    WHERE m.candidate_id = c.id AND m.scheduled_at >= now()) AS next_meeting_at`;
+
 const WHERE_FILTERS = `
   ($1::text IS NULL OR (
      c.name                ILIKE '%' || $1 || '%' OR
@@ -147,7 +172,8 @@ async function list({
 } = {}) {
   const { rows } = await query(
     `SELECT ${FIELDS},
-            ${withNotes ? NOTES_AGGREGATE : NOTE_COUNT}
+            ${withNotes ? NOTES_AGGREGATE : NOTE_COUNT},
+            ${MEETING_DATES}
        FROM candidates c
       WHERE ${WHERE_FILTERS}
       ORDER BY c.created_at DESC
@@ -168,7 +194,8 @@ async function count(filters = {}) {
 
 async function findByExternalId(externalId) {
   const { rows } = await query(
-    `SELECT ${FIELDS}, c.raw_text FROM candidates c WHERE c.external_id = $1`,
+    `SELECT ${FIELDS}, c.raw_text, ${MEETING_DATES}
+       FROM candidates c WHERE c.external_id = $1`,
     [externalId]
   );
   return rows[0] || null;
@@ -201,6 +228,37 @@ async function fileFor(externalId) {
 }
 
 /** Corrects a field the extraction got wrong. Recruiters will always need this. */
+/**
+ * Attaches a CV to a candidate who has none, or replaces the one on file.
+ *
+ * Deliberately does NOT re-extract the fields. A candidate reached this state
+ * either by being entered by hand or by being corrected since upload, and both
+ * mean somebody has typed what they know into those columns. Re-running
+ * extraction over a newly attached file would overwrite that with a model's
+ * reading of it, which is the one thing an "attach the CV" button must not do.
+ *
+ * raw_text is filled only when it is empty, so a candidate who had no readable
+ * CV gains the text view without an existing one being replaced.
+ */
+async function attachFile(externalId, { fileName, fileSize, mimeType, fileData, rawText }) {
+  const { rows } = await query(
+    `UPDATE candidates
+        SET file_name  = $2,
+            file_size  = $3,
+            mime_type  = $4,
+            file_data  = $5,
+            raw_text   = CASE
+                           WHEN COALESCE(btrim(raw_text), '') = '' THEN COALESCE($6, raw_text)
+                           ELSE raw_text
+                         END,
+            updated_at = now()
+      WHERE external_id = $1
+      RETURNING id`,
+    [externalId, fileName, fileSize ?? null, mimeType || null, fileData, rawText || null]
+  );
+  return rows[0] ? findByExternalId(externalId) : null;
+}
+
 async function update(externalId, fields) {
   // The comparable figure follows the string it came from. Nobody types the
   // annual number any more — there is one salary field on screen — so editing
@@ -257,5 +315,5 @@ async function remove(externalId) {
 }
 
 module.exports = {
-  create, list, count, findByExternalId, findById, fileFor, update, remove,
+  create, list, count, findByExternalId, findById, fileFor, attachFile, update, remove,
 };

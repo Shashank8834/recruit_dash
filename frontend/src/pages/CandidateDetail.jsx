@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import Notes from '../components/Notes';
-import MeetingList from '../components/MeetingList';
+import MeetingList, { MeetingCadence } from '../components/MeetingList';
 import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
 
@@ -87,6 +87,21 @@ export default function CandidateDetail() {
   }
   if (error && !applicant) return <div className="notice-error">Error: {error}</div>;
   if (!applicant) return null;
+
+  // Last already-held meeting and soonest still ahead. Split on now() rather
+  // than on status, matching the server: a meeting that has happened has
+  // happened whether or not anyone remembered to close it, and reading the
+  // last contact off an unclosed future booking would make somebody look
+  // attended-to when they are not.
+  const meetingTimes = (applicant.meetings || [])
+    .map((m) => m.scheduled_at)
+    .filter(Boolean)
+    .sort();
+  const now = Date.now();
+  const heldMeetings = meetingTimes.filter((t) => new Date(t).getTime() < now);
+  const aheadMeetings = meetingTimes.filter((t) => new Date(t).getTime() >= now);
+  const lastMeetingAt = heldMeetings.length ? heldMeetings[heldMeetings.length - 1] : null;
+  const nextMeetingAt = aheadMeetings.length ? aheadMeetings[0] : null;
 
   const sortedMatches = [...(applicant.matches || [])].sort(
     (a, b) => (RESULT_ORDER[a.Result] ?? 6) - (RESULT_ORDER[b.Result] ?? 6)
@@ -195,6 +210,14 @@ export default function CandidateDetail() {
             {(applicant.meetings || []).length > 0 ? 'Book another' : 'Book one'}
           </Link>
         </div>
+        {/* Derived from the rows already fetched rather than from a second
+            query: an applicant has no candidates row to hang the dates off,
+            and the meetings are all here anyway. */}
+        <MeetingCadence
+          last={lastMeetingAt}
+          next={nextMeetingAt}
+          total={(applicant.meetings || []).length}
+        />
         <MeetingList
           meetings={applicant.meetings || []}
           hidePerson

@@ -132,11 +132,7 @@ export default function Dashboard() {
             <SummaryCard
               label="Meetings booked"
               value={(stats.meetings || {}).upcoming || 0}
-              hint={
-                (stats.meetings || {}).overdue
-                  ? `${stats.meetings.overdue} past their date and never closed`
-                  : 'Nothing left unclosed'
-              }
+              hint={`${(stats.meetings || {}).held || 0} already held`}
             />
             <SummaryCard
               label="Talent pool"

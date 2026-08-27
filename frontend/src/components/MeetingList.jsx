@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import Notes from './Notes';
-import { formatDateTime, isPast, ordinal } from '../lib/utils';
+import { formatDateTime, formatRelative, ordinal } from '../lib/utils';
 
 /**
  * Meetings as a table, on the Meetings page and on every record that has some.
@@ -10,32 +10,6 @@ import { formatDateTime, isPast, ordinal } from '../lib/utils';
  * AND in the past. That is a conversation somebody had and never concluded,
  * and it is the only row here that needs chasing, so it is the only one marked.
  */
-
-export function MeetingStatus({ meeting }) {
-  const overdue = meeting.status === 'open' && isPast(meeting.scheduled_at);
-  const label = meeting.status === 'closed' ? 'Closed' : overdue ? 'Needs closing' : 'Open';
-  return (
-    <span
-      className={[
-        'inline-flex whitespace-nowrap items-center border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-micro',
-        meeting.status === 'closed'
-          ? 'border-rule bg-paper text-ink-3'
-          : overdue
-            ? 'border-ink bg-ink text-paper'
-            : 'border-ink bg-paper text-ink',
-      ].join(' ')}
-      title={
-        overdue
-          ? 'The date has passed and it was never closed'
-          : meeting.status === 'closed'
-            ? 'Concluded'
-            : 'Still to happen'
-      }
-    >
-      {label}
-    </span>
-  );
-}
 
 /**
  * Which meeting with this person this one is.
@@ -66,6 +40,69 @@ export function MeetingSequence({ meeting, className = '' }) {
     >
       {ordinal(number)} of {total}
     </span>
+  );
+}
+
+/**
+ * When this person was last seen, and when they are next due.
+ *
+ * The two dates every other screen makes you work out for yourself by reading
+ * a list and doing the arithmetic. Shown together because they are one
+ * question — "where are we with them" — and separately useless: a last meeting
+ * four months ago is only alarming once you know nothing is booked.
+ *
+ * Both are rendered relative with the exact date beside them. The relative form
+ * is what the judgement is made on; the absolute one is what gets repeated back
+ * to a client, and dropping it would mean opening the meeting to read it.
+ *
+ * @param {string} [last]  the most recent meeting already in the past
+ * @param {string} [next]  the soonest still ahead
+ * @param {number} [total] how many there have been in all
+ */
+export function MeetingCadence({ last, next, total }) {
+  if (!last && !next) {
+    return (
+      <p className="text-sm text-ink-3">
+        Never met. Nothing booked.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+      <span className="text-sm">
+        <span className="micro">Last met </span>
+        {last ? (
+          <>
+            <span className="font-semibold text-ink">{formatRelative(last)}</span>
+            <span className="text-ink-2"> · {formatDateTime(last)}</span>
+          </>
+        ) : (
+          // Distinguished from "never met" above: there IS a booking, it just
+          // has not happened yet, which is a different position to be in.
+          <span className="text-ink-3">not yet</span>
+        )}
+      </span>
+
+      <span className="text-sm">
+        <span className="micro">Next </span>
+        {next ? (
+          <>
+            <span className="font-semibold text-ink">{formatRelative(next)}</span>
+            <span className="text-ink-2"> · {formatDateTime(next)}</span>
+          </>
+        ) : (
+          // The state worth noticing: met before, nothing arranged since.
+          <span className="text-ink-3">nothing booked</span>
+        )}
+      </span>
+
+      {total > 0 && (
+        <span className="text-xs text-ink-2">
+          {total} meeting{total === 1 ? '' : 's'} in all
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -185,8 +222,8 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
   // written as a literal because the expanded notes row spans it, and a
   // hardcoded number silently misaligns the drawer on the pages that pass
   // hidePerson or hideRole.
-  // When, About, Status and Notes are always there; Who and Role are not.
-  const columnCount = 4 + (hidePerson ? 0 : 1) + (hideRole ? 0 : 1);
+  // When, About and Notes are always there; Who and Role are not.
+  const columnCount = 3 + (hidePerson ? 0 : 1) + (hideRole ? 0 : 1);
 
   return (
     <div className="overflow-x-auto">
@@ -197,7 +234,6 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
             {!hidePerson && <th className="th">Who</th>}
             <th className="th">About</th>
             {!hideRole && <th className="th">Role</th>}
-            <th className="th">Status</th>
             <th className="th">Notes</th>
           </tr>
         </thead>
@@ -215,6 +251,12 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
                   >
                     {formatDateTime(meeting.scheduled_at)}
                   </Link>
+                  {/* Both, always. The absolute date is what goes in a diary;
+                      the relative one is what you judge by — "Mar 10" does not
+                      tell you somebody has gone cold, "5 months ago" does. */}
+                  <span className="block text-xs text-ink-2">
+                    {formatRelative(meeting.scheduled_at)}
+                  </span>
                   <span className="mono block">{meeting.external_id}</span>
                   {/* On a person's own page the name is hidden but the
                       sequence is the whole point of the list, so it moves up
@@ -257,13 +299,6 @@ export default function MeetingList({ meetings = [], hidePerson, hideRole, empty
                     )}
                   </td>
                 )}
-
-                <td className="td">
-                  <MeetingStatus meeting={meeting} />
-                  {meeting.outcome && (
-                    <span className="mt-1 block max-w-xs text-xs text-ink-2">{meeting.outcome}</span>
-                  )}
-                </td>
 
                 <td className="td">
                   {/* A button rather than the bare count it used to be. The

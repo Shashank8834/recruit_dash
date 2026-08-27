@@ -111,6 +111,82 @@ export function ordinal(n) {
   return `${num}${suffix}`;
 }
 
+/**
+ * How long ago, or how far off — "3 days ago", "in 2 weeks", "today".
+ *
+ * A date on its own does not answer the question anybody is actually asking.
+ * "Mar 10" tells you nothing about whether that person has gone cold; "5
+ * months ago" tells you immediately, and it is the same fact. So dates on
+ * meetings are shown both ways: the absolute one because it is what you put in
+ * a calendar, the relative one because it is what you judge by.
+ *
+ * Thresholds are deliberately coarse. Nobody schedules around "37 days ago" —
+ * "over a month ago" is the unit the decision is actually made in.
+ */
+export function formatRelative(value) {
+  const date = toDate(value);
+  if (!date) return '';
+
+  const ms = date.getTime() - Date.now();
+  const future = ms > 0;
+  const mins = Math.round(Math.abs(ms) / 60000);
+
+  if (mins < 1) return 'just now';
+  if (mins < 60) return future ? `in ${mins} min` : `${mins} min ago`;
+
+  const hours = Math.round(mins / 60);
+  if (hours < 24) {
+    return future
+      ? `in ${hours} hour${hours === 1 ? '' : 's'}`
+      : `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+
+  // Whole calendar days apart, not 24-hour blocks: a meeting at 9am tomorrow
+  // is "tomorrow" even when it is 20 hours away, which is how anyone reading a
+  // schedule means it.
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(date) - startOfDay(new Date())) / 86400000);
+
+  if (days === 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  if (days === -1) return 'yesterday';
+
+  const away = Math.abs(days);
+  if (away < 7) return future ? `in ${away} days` : `${away} days ago`;
+
+  if (away < 31) {
+    const weeks = Math.round(away / 7);
+    return future
+      ? `in ${weeks} week${weeks === 1 ? '' : 's'}`
+      : `${weeks} week${weeks === 1 ? '' : 's'} ago`;
+  }
+
+  if (away < 365) {
+    const months = Math.round(away / 30);
+    return future
+      ? `in ${months} month${months === 1 ? '' : 's'}`
+      : `${months} month${months === 1 ? '' : 's'} ago`;
+  }
+
+  const years = Math.round(away / 365);
+  return future
+    ? `in ${years} year${years === 1 ? '' : 's'}`
+    : `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+/**
+ * Whole days between two timestamps, for the gap between one meeting and the
+ * next. Null when either end is missing, so a caller renders nothing rather
+ * than "NaN days".
+ */
+export function daysBetween(from, to) {
+  const a = toDate(from);
+  const b = toDate(to);
+  if (!a || !b) return null;
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
+}
+
 /** Whether a scheduled time has already passed. */
 export function isPast(value) {
   const date = toDate(value);

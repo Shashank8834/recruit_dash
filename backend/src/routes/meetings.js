@@ -101,6 +101,19 @@ function listFilters(req) {
     // the subject and the meeting id. Trimmed here so a box left holding a
     // space does not filter everything out.
     search: text(req.query.search),
+    // The window, as instants rather than dates.
+    //
+    // The browser sends them, because only the browser knows what "last week"
+    // means where the user is sitting. Computing the boundary here would use
+    // the container's clock — which is UTC unless TZ says otherwise — and a
+    // meeting at 09:00 IST on Monday would fall into the previous week for
+    // anyone asking from India.
+    //
+    // Unparseable values are dropped rather than defaulted: a filter that
+    // silently became "all time" looks like an empty week rather than a
+    // broken input.
+    from: when(req.query.from),
+    to: when(req.query.to),
   };
 }
 

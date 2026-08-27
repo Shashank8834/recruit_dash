@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import MeetingList, { MeetingCadence } from '../components/MeetingList';
-import { joinDateTime, formatDateTime, formatRelative, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
+import {
+  joinDateTime, formatDateTime, formatRelative, ordinal, DEFAULT_MEETING_TIME,
+  MEETING_PERIODS, periodRange, customRange, describeRange,
+} from '../lib/utils';
 
 /**
  * Meetings booked with candidates, in date order.
@@ -246,21 +249,40 @@ export default function Meetings() {
   const search = params.get('q') || '';
   const [term, setTerm] = useState(search);
 
-  // The search is the only filter now, so the query string is just it.
+  // The window being looked at. A named period, or 'custom' plus two dates.
+  // Both live in the URL so a filtered view is a link somebody can send.
+  const period = MEETING_PERIODS.some((option) => option.key === params.get('period'))
+    || params.get('period') === 'custom'
+    ? params.get('period')
+    : '';
+  const customFrom = params.get('from') || '';
+  const customTo = params.get('to') || '';
+
+  const range = useMemo(
+    () => (period === 'custom' ? customRange(customFrom, customTo) : periodRange(period)),
+    [period, customFrom, customTo]
+  );
+
   const query = useMemo(() => {
     const built = new URLSearchParams();
     if (search.trim()) built.set('search', search.trim());
+    // Sent as instants, not dates: the boundary was worked out here, where the
+    // local timezone is known, and an ISO instant is the one form the server
+    // cannot misread.
+    if (range.from) built.set('from', range.from.toISOString());
+    if (range.to) built.set('to', range.to.toISOString());
     return built.toString();
-  }, [search]);
+  }, [search, range]);
 
+  // Every filter lives in the URL, so setting one has to carry the others.
   const setQuery = useCallback((next) => {
-    const merged = { q: search, ...next };
+    const merged = { q: search, period, from: customFrom, to: customTo, ...next };
     const cleaned = {};
     for (const [key, value] of Object.entries(merged)) {
       if (value) cleaned[key] = value;
     }
     setParams(cleaned, { replace: true });
-  }, [search, setParams]);
+  }, [search, period, customFrom, customTo, setParams]);
 
   // 300ms, matching the person picker. Skipped when the draft already equals
   // what is committed, so arriving on the page with ?q= in the URL does not
@@ -390,6 +412,16 @@ export default function Meetings() {
     history && history.nextNumber > 1
       ? `${ordinal(history.nextNumber)} round — following up on the last conversation`
       : 'First round — background and expectations';
+
+  // What is actually on screen, counted. "How many meetings last week" is
+  // half the question the filter exists to answer, and counting the rows by
+  // eye is the part nobody does.
+  const shown = meetings.length;
+  const people = new Set(
+    meetings.map((m) => m.person_ref || m.person_name).filter(Boolean)
+  ).size;
+  const activePeriod = MEETING_PERIODS.find((option) => option.key === period);
+  const rangeText = describeRange(range.from, range.to);
 
   return (
     <div className="space-y-10">
@@ -528,16 +560,100 @@ export default function Meetings() {
         </label>
         {search && (
           <p className="flex flex-wrap items-center gap-3 text-xs text-ink-2">
-            <span>
-              {loading
-                ? 'Searching…'
-                : `${meetings.length} meeting${meetings.length === 1 ? '' : 's'} matching “${search}”`}
-            </span>
+            <span>Matching “{search}”</span>
             <button type="button" className="btn-quiet text-xs" onClick={() => setTerm('')}>
               Clear
             </button>
           </p>
         )}
+      </div>
+
+      {/* The window. Presets rather than two date boxes, because "last week"
+          is how the question is asked — being made to work out that last week
+          began on the 17th is the reason nobody asks it. The two boxes are
+          still there behind Custom for the ranges a preset cannot name. */}
+      <div className="space-y-3">
+        {/* A grid rather than a wrapping flex row. With flex-1 the last row
+            takes whatever is left over, so on a phone the single "Custom"
+            chip stretched the full width and read as a heading rather than as
+            one option among eight. A grid keeps every cell the same size
+            however they wrap. */}
+        <div className="grid grid-cols-3 gap-px border border-rule bg-rule sm:grid-cols-4 lg:grid-cols-8">
+          {[...MEETING_PERIODS, { key: 'custom', label: 'Custom' }].map((option) => (
+            <button
+              key={option.key}
+              onClick={() => setQuery({
+                period: option.key,
+                // Dropped when leaving Custom, so a stale hand-picked range
+                // cannot sit in the URL narrowing a preset nobody expects it to.
+                from: option.key === 'custom' ? customFrom : '',
+                to: option.key === 'custom' ? customTo : '',
+              })}
+              className={[
+                'px-3 py-2.5 text-[13px] font-semibold transition-colors',
+                option.key === period
+                  ? 'bg-ink text-paper'
+                  : 'bg-paper text-ink-2 hover:bg-surface hover:text-ink',
+              ].join(' ')}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        {period === 'custom' && (
+          <div className="flex flex-wrap items-end gap-4 border border-rule px-4 py-3">
+            <label className="block">
+              <span className="micro">From</span>
+              <input
+                className="input mt-1.5"
+                type="date"
+                value={customFrom}
+                onChange={(e) => setQuery({ from: e.target.value })}
+              />
+            </label>
+            <label className="block">
+              <span className="micro">To</span>
+              <input
+                className="input mt-1.5"
+                type="date"
+                value={customTo}
+                onChange={(e) => setQuery({ to: e.target.value })}
+              />
+            </label>
+            <p className="text-xs text-ink-3">
+              {/* Said out loud because an inclusive end date is the thing
+                  people check twice. */}
+              Both days are included. Leave either blank for an open end.
+            </p>
+          </div>
+        )}
+
+        {/* The count. This is what the filter is for — the list answers
+            "which meetings", this answers "how many". */}
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-l-2 border-ink px-4 py-2">
+          {loading ? (
+            <p className="text-sm text-ink-3">Counting…</p>
+          ) : (
+            <>
+              <p className="text-sm">
+                <span className="tnum text-lg font-bold text-ink">{shown}</span>
+                <span className="text-ink"> meeting{shown === 1 ? '' : 's'}</span>
+                {activePeriod && activePeriod.key
+                  ? <span className="text-ink-2"> {activePeriod.label.toLowerCase()}</span>
+                  : period === 'custom' && rangeText
+                    ? <span className="text-ink-2"> in this range</span>
+                    : <span className="text-ink-2"> in all</span>}
+              </p>
+              {people > 0 && (
+                <p className="text-xs text-ink-2">
+                  with {people} {people === 1 ? 'person' : 'different people'}
+                </p>
+              )}
+              {rangeText && <p className="mono ml-auto">{rangeText}</p>}
+            </>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -549,8 +665,10 @@ export default function Meetings() {
           meetings={meetings}
           empty={
             search
-              ? `Nobody and nothing matching “${search}”.`
-              : 'No meetings yet. Book one against anyone in the talent pool.'
+              ? `Nobody and nothing matching “${search}”${rangeText ? ` in ${rangeText}` : ''}.`
+              : rangeText
+                ? `No meetings in ${rangeText}.`
+                : 'No meetings yet. Book one against anyone in the talent pool.'
           }
         />
       )}

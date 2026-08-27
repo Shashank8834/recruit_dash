@@ -119,12 +119,14 @@ const SEARCH_COLUMNS = [
 /**
  * @param {object} opts
  * @param {string} [opts.search]     name, email, phone, subject or id
+ * @param {string} [opts.from]       ISO instant; meetings at or after it
+ * @param {string} [opts.to]         ISO instant; meetings strictly before it
  * @param {number} [opts.candidateId]
  * @param {number} [opts.contactId]
  * @param {number} [opts.manualJobId]
  */
 async function list({
-  search, candidateId, contactId, manualJobId, limit = 200,
+  search, from, to, candidateId, contactId, manualJobId, limit = 500,
 } = {}) {
   const { rows } = await query(
     `SELECT ${SELECT}
@@ -135,13 +137,21 @@ async function list({
         AND ($4::text IS NULL OR (
               ${SEARCH_COLUMNS.map((col) => `${col} ILIKE '%' || $4 || '%'`).join(' OR ')}
             ))
+        -- Half-open: >= from, < to. A closed range on both ends has to pick
+        -- between including and excluding the final instant, and every choice
+        -- is wrong somewhere — a meeting at exactly midnight lands in both
+        -- weeks or in neither. Half-open makes consecutive periods tile
+        -- exactly, so "last week" and "this week" can never double-count a
+        -- meeting or lose one between them.
+        AND ($5::timestamptz IS NULL OR m.scheduled_at >= $5)
+        AND ($6::timestamptz IS NULL OR m.scheduled_at <  $6)
       -- Plain date order, newest first. There is no longer a state that makes
       -- one meeting more urgent than another, so the only ordering left is the
       -- one a diary uses.
       ORDER BY m.scheduled_at DESC
-      LIMIT $5`,
+      LIMIT $7`,
     [candidateId || null, contactId || null, manualJobId || null,
-     search || null, limit]
+     search || null, from || null, to || null, limit]
   );
   return rows;
 }

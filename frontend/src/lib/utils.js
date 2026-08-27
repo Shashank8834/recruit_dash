@@ -187,6 +187,145 @@ export function daysBetween(from, to) {
   return Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
 }
 
+/**
+ * The named periods the meetings list can be filtered to.
+ *
+ * Computed in the browser on purpose. Only the browser knows what "last week"
+ * means where the person asking is sitting — work these out on the server and
+ * the boundary lands on the container's clock, which is UTC unless TZ says
+ * otherwise, and a 09:00 IST Monday meeting falls into the previous week for
+ * everybody in India.
+ *
+ * Every range is half-open: from <= t < to. Consecutive periods then tile
+ * exactly, so a meeting at midnight on Sunday belongs to precisely one week
+ * rather than to both or to neither.
+ *
+ * Weeks start on Monday. A recruiting week is a working week, and a Sunday
+ * start puts the weekend at the front of a list of meetings nobody had.
+ */
+export const MEETING_PERIODS = [
+  { key: '', label: 'All time' },
+  { key: 'today', label: 'Today' },
+  { key: 'this-week', label: 'This week' },
+  { key: 'last-week', label: 'Last week' },
+  { key: 'this-month', label: 'This month' },
+  { key: 'last-month', label: 'Last month' },
+  { key: 'next-7', label: 'Next 7 days' },
+];
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+/** Monday 00:00 of the week containing `date`, in local time. */
+function startOfWeek(date) {
+  const day = startOfDay(date);
+  // getDay() is 0 for Sunday; shifting by 6 makes Monday 0 and Sunday 6, so a
+  // Sunday goes back six days rather than forward one.
+  return addDays(day, -((day.getDay() + 6) % 7));
+}
+
+/**
+ * The {from, to} instants for a named period, or nulls for "all time".
+ *
+ * @param {string} key   one of MEETING_PERIODS
+ * @param {Date} [now]   injectable so the boundaries can be tested
+ */
+export function periodRange(key, now = new Date()) {
+  const today = startOfDay(now);
+
+  switch (key) {
+    case 'today':
+      return { from: today, to: addDays(today, 1) };
+    case 'this-week': {
+      const from = startOfWeek(now);
+      return { from, to: addDays(from, 7) };
+    }
+    case 'last-week': {
+      const thisWeek = startOfWeek(now);
+      return { from: addDays(thisWeek, -7), to: thisWeek };
+    }
+    case 'this-month': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from, to: new Date(now.getFullYear(), now.getMonth() + 1, 1) };
+    }
+    case 'last-month': {
+      // Month 0 minus one is December of the previous year, which the Date
+      // constructor already handles — no special case for January.
+      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      return { from, to: new Date(now.getFullYear(), now.getMonth(), 1) };
+    }
+    case 'next-7':
+      // From the start of today, so a meeting earlier this morning still
+      // counts as part of the week ahead rather than being already gone.
+      return { from: today, to: addDays(today, 7) };
+    default:
+      return { from: null, to: null };
+  }
+}
+
+/**
+ * A hand-picked range from two `<input type="date">` values.
+ *
+ * The end date is inclusive as the user means it: picking 20th to 27th is a
+ * request for the 27th's meetings, so `to` is midnight at the START of the
+ * 28th. Passing the 27th straight through would silently drop everything that
+ * day and look like an empty afternoon.
+ *
+ * Either end may be blank — "everything since the 1st" and "everything up to
+ * the 15th" are both things people ask for.
+ */
+export function customRange(fromDate, toDate) {
+  const from = fromDate ? toDate_(fromDate) : null;
+  // Parsed BEFORE the day is added. addDays(null, 1) is not null — it is
+  // 2 Jan 1970, because new Date(null) is the epoch — and a `to` of 1970
+  // hides every meeting there has ever been. A date input only ever produces
+  // a valid value or an empty one, but these two live in the query string and
+  // a hand-edited URL reaches this with anything at all.
+  const parsedTo = toDate ? toDate_(toDate) : null;
+  return { from, to: parsedTo ? addDays(parsedTo, 1) : null };
+}
+
+/** A date-input value as local midnight, or null. */
+function toDate_(value) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  if (!parts) return null;
+
+  const year = Number(parts[1]);
+  const month = Number(parts[2]) - 1;
+  const day = Number(parts[3]);
+  const date = new Date(year, month, day);
+
+  // The shape being right does not make the date real: the Date constructor
+  // rolls 2026-13-45 forward into February 2027 rather than refusing it. Only
+  // a value that survives the round trip is a date somebody meant.
+  if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
+    return null;
+  }
+  return date;
+}
+
+/**
+ * How a range reads in a sentence — "Aug 18 – Aug 24".
+ *
+ * The end is shown as the last day INSIDE the range rather than the exclusive
+ * boundary, because "18 Aug – 25 Aug" for a week that ends on the 24th is the
+ * kind of off-by-one that makes somebody re-check every number on the page.
+ */
+export function describeRange(from, to) {
+  if (!from && !to) return '';
+  const last = to ? addDays(to, -1) : null;
+  if (from && last) return `${formatDate(from)} – ${formatDate(last)}`;
+  if (from) return `from ${formatDate(from)}`;
+  return `up to ${formatDate(last)}`;
+}
+
 /** Whether a scheduled time has already passed. */
 export function isPast(value) {
   const date = toDate(value);

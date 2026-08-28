@@ -54,6 +54,17 @@ export default function App() {
         <Route path="/roles/:id" element={<ManualRoleDetail />} />
         <Route path="/meetings" element={<Meetings />} />
         <Route path="/meetings/:id" element={<MeetingDetail />} />
+
+        {/* Anything else lands on the Overview.
+            Without this, an unmatched path rendered the navigation with an
+            empty space where the page should be — which reads as the app
+            having broken rather than as a URL that does not exist. It is
+            reachable by ordinary means: a typo, a stale bookmark, and
+            /login in particular, which people try because every other site
+            has one. There is no /login here — the sign-in screen replaces
+            the whole app when there is no session, so a path for it would
+            only ever be somewhere to land while already signed in. */}
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Layout>
   );

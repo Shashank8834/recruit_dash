@@ -81,7 +81,11 @@ services:
       - LOGIN_ATTEMPT_LIMIT=${LOGIN_ATTEMPT_LIMIT:-8}
       - CV_UPLOAD_MAX_MB=${CV_UPLOAD_MAX_MB:-15}
       - CV_EXTRACT_CHARS=${CV_EXTRACT_CHARS:-12000}
-      - CV_EXTRACT_OUTPUT_TOKENS=${CV_EXTRACT_OUTPUT_TOKENS:-3072}
+      # Reserved output is metered against tokens-per-minute IN FULL, so this
+      # is subtracted from the room a CV has before a single character of it
+      # is counted. At 3072 an ordinary two-page CV did not fit under a
+      # 6000-TPM ceiling and was rejected as "could not be read".
+      - CV_EXTRACT_OUTPUT_TOKENS=${CV_EXTRACT_OUTPUT_TOKENS:-1536}
       - TALENT_SHORTLIST=${TALENT_SHORTLIST:-12}
       - TALENT_PROFILE_CHARS=${TALENT_PROFILE_CHARS:-600}
       - TALENT_JOB_CHARS=${TALENT_JOB_CHARS:-2500}

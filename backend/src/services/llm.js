@@ -55,6 +55,24 @@ const MAX_TPM = parseFloat(
 );
 
 /**
+ * The system message as it actually goes over the wire.
+ *
+ * Not the same string the caller passed. On an OpenAI-compatible provider the
+ * schema is appended to the system prompt, because response_format guarantees
+ * valid JSON but not the right shape — and that appendix is real, metered
+ * characters, over a thousand of them for the CV schema. Estimating from the
+ * caller's `system` alone under-counted every request by roughly 300 tokens,
+ * in the one direction the comment below says it must never lean.
+ *
+ * Gemini takes the schema as a separate `responseSchema` field, so there the
+ * two strings are the same.
+ */
+function wireSystem(system, schema) {
+  if (PROVIDER === 'gemini' || !schema) return system || '';
+  return `${system || ''}\n\n${describeSchema(schema)}`;
+}
+
+/**
  * What this request will cost against the token budget, before sending it.
  *
  * Two deliberate biases, both upward. Four characters per token is the usual
@@ -64,9 +82,40 @@ const MAX_TPM = parseFloat(
  * estimate that is a little high costs a few seconds of idling. One that is
  * low costs a 429, and 429s are what this whole file exists to avoid.
  */
-function estimateTokens(system, prompt, maxOutputTokens = MAX_OUTPUT_TOKENS) {
-  const chars = (system || '').length + (prompt || '').length;
+function estimateTokens(system, prompt, maxOutputTokens = MAX_OUTPUT_TOKENS, schema = null) {
+  const chars = wireSystem(system, schema).length + (prompt || '').length;
   return Math.ceil(chars / 4) + maxOutputTokens;
+}
+
+/**
+ * Absorbs the difference between four-characters-per-token and what the
+ * tokeniser actually does. Small: the point is to stop a prompt landing one
+ * token over the line, not to reserve a second budget.
+ */
+const ESTIMATE_MARGIN_TOKENS = 128;
+
+/**
+ * How much room a prompt has, given everything that is charged alongside it.
+ *
+ * The per-request ceiling is spent before the caller's text is even
+ * considered: the system prompt, the schema appended to it, and the output
+ * budget reserved in full are all fixed costs. What remains is what the prompt
+ * may occupy — and a caller that measures it up front never has to learn it
+ * from a rejection.
+ *
+ * `chars` is Infinity when no token ceiling is configured (the Gemini
+ * default), which callers read as "no need to shrink anything".
+ *
+ * @returns {{chars: number, fixedTokens: number, ceiling: number}}
+ */
+function promptBudget({ system, schema, maxOutputTokens }) {
+  const cap = maxOutputTokens || MAX_OUTPUT_TOKENS;
+  const fixedTokens = Math.ceil(wireSystem(system, schema).length / 4) + cap;
+  if (!MAX_TPM || MAX_TPM <= 0) {
+    return { chars: Infinity, fixedTokens, ceiling: MAX_TPM };
+  }
+  const spare = MAX_TPM - fixedTokens - ESTIMATE_MARGIN_TOKENS;
+  return { chars: spare * 4, fixedTokens, ceiling: MAX_TPM };
 }
 
 /** Tokens the provider says it actually charged, across both wire formats. */
@@ -358,7 +407,7 @@ async function generateJson({ system, prompt, schema, model, maxOutputTokens }) 
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const estimated = estimateTokens(system, prompt, outputCap);
+      const estimated = estimateTokens(system, prompt, outputCap, schema);
       const { logId } = await rateLimiter.acquire(MAX_RPM, {
         maxTpm: MAX_TPM,
         estimatedTokens: estimated,
@@ -443,6 +492,11 @@ async function generateJson({ system, prompt, schema, model, maxOutputTokens }) 
 module.exports = {
   generateJson,
   estimateTokens,
+  // How much room a prompt has before the provider rejects it. Callers that
+  // assemble text of unbounded length fit to this rather than discovering the
+  // ceiling from a rejection.
+  promptBudget,
+  wireSystem,
   // Exported for tests. Both are one word away from their opposite and both
   // failed silently in production before they were pinned.
   isOversizedRequest,

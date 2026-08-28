@@ -1,4 +1,4 @@
-const { generateJson } = require('./llm');
+const { generateJson, promptBudget } = require('./llm');
 
 /**
  * Bump this whenever a prompt or schema below changes. It is stored on every
@@ -56,8 +56,65 @@ function clip(text, max, label) {
 }
 
 /**
- * Sends a prompt that might exceed the provider's per-request token ceiling,
- * halving it and retrying if it does.
+ * The largest scale at which `build` fits under the per-request ceiling.
+ *
+ * Measured before anything is sent. Halving on rejection works, but it learns
+ * the ceiling the expensive way — one wasted round trip per halving, and each
+ * halving overshoots, throwing away up to half a document to save the few
+ * hundred characters that were actually over. A prompt measured against the
+ * budget first is sent once, at very nearly the largest size that fits.
+ *
+ * The ratio is applied repeatedly rather than once because `build` is not
+ * linear in scale: the headings, separators and role titles around the text do
+ * not shrink with it, so one division lands short and needs correcting. Four
+ * passes is far more than the two it takes to converge in practice.
+ *
+ * If even a fully-shrunk prompt does not fit, the fixed costs alone have
+ * filled the ceiling and no prompt of any length would have worked. That is a
+ * configuration fault, not a document fault, so it says which knob to turn
+ * rather than reporting a token count the operator has to reverse-engineer.
+ */
+function fitScale({ system, schema, build, label, maxOutputTokens }) {
+  const budget = promptBudget({ system, schema, maxOutputTokens });
+  if (!Number.isFinite(budget.chars)) return 1;
+
+  let scale = 1;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const length = build(scale).length;
+    if (length <= budget.chars) {
+      if (scale < 1) {
+        console.warn(
+          `[prompt] ${label} trimmed to ${Math.round(scale * 100)}% of its character ` +
+          `budget to fit the ${budget.ceiling}-token per-request ceiling`
+        );
+      }
+      return scale;
+    }
+    if (budget.chars <= 0) break;
+    // 0.98 so rounding in the estimate cannot leave it a token over.
+    scale *= (budget.chars / length) * 0.98;
+  }
+
+  throw new Error(
+    `${label} cannot fit under the ${budget.ceiling}-token LLM_MAX_TPM ceiling: the ` +
+    `system prompt and the ${maxOutputTokens || '(default)'}-token output reservation ` +
+    `alone need ${budget.fixedTokens} tokens, leaving nothing for the text. ` +
+    'Raise LLM_MAX_TPM or lower the output budget for this stage.'
+  );
+}
+
+/**
+ * Sends a prompt that fits the per-request token ceiling, halving and
+ * retrying if the provider disagrees.
+ *
+ * fitScale above sizes it before the first call, so the halving here is a
+ * backstop rather than the mechanism: it covers the case where the provider's
+ * real ceiling is lower than the configured LLM_MAX_TPM, which our own
+ * arithmetic has no way to know.
+ *
+ * Shared with cvExtractor, which faces the same ceiling with a different
+ * prompt: the two stages here and the CV extractor are the only callers that
+ * assemble a prompt from text of unbounded length.
  *
  * A TOKEN_LIMIT rejection is not a rate limit: the request is too big, so
  * waiting changes nothing and resending it unchanged fails identically. The
@@ -68,7 +125,7 @@ function clip(text, max, label) {
  * @param {function(number): string} build  Renders the prompt at a 0-1 scale.
  */
 async function generateShrinking({ system, schema, build, label, maxOutputTokens }) {
-  let scale = 1;
+  let scale = fitScale({ system, schema, build, label, maxOutputTokens });
   let lastError;
 
   for (let attempt = 1; attempt <= SHRINK_ATTEMPTS; attempt += 1) {
@@ -81,7 +138,7 @@ async function generateShrinking({ system, schema, build, label, maxOutputTokens
       if (!/TOKEN_LIMIT/.test(err.message || '') || attempt === SHRINK_ATTEMPTS) throw err;
       scale /= 2;
       console.warn(
-        `[classifier] ${label} request over the token ceiling; ` +
+        `[prompt] ${label} request over the token ceiling; ` +
         `retrying at ${Math.round(scale * 100)}% of the character budget`
       );
     }
@@ -405,6 +462,7 @@ function applyConfidenceFloor(result) {
 module.exports = {
   route,
   match,
+  generateShrinking, // shared with cvExtractor: same ceiling, different prompt
   renderJds, // exported for tests: prompt budgeting is easy to get subtly wrong
   clip,
   applyConfidenceFloor,

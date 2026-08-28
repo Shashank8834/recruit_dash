@@ -1,5 +1,4 @@
-const { generateJson } = require('./llm');
-const { clip } = require('./classifier');
+const { clip, generateShrinking } = require('./classifier');
 const { parse: parseSalary } = require('./salary');
 
 /**
@@ -24,11 +23,20 @@ const EXTRACTION_VERSION = 'cv-v4';
 // the router's. ~12k characters is about 3k tokens, which leaves room under a
 // free tier's per-minute ceiling.
 const CV_CHARS = parseInt(process.env.CV_EXTRACT_CHARS || '12000', 10);
-// Raised alongside the skills cap. A CV can name forty skills, and the whole
-// extraction is one JSON object — so a budget that fits the identity fields but
-// not the list truncates the response mid-array and loses the other fields with
-// it. The unused headroom costs nothing; output is billed on what is generated.
-const CV_OUTPUT_TOKENS = parseInt(process.env.CV_EXTRACT_OUTPUT_TOKENS || '3072', 10);
+// The unused headroom is NOT free, which is what 3072 got wrong. Output is
+// billed on what is generated, but it is METERED on what is reserved: the
+// provider counts the whole max_tokens against tokens-per-minute the moment the
+// request arrives. At 3072 the reservation alone was more than half a 6000-TPM
+// ceiling, and with the ~1100-token system prompt on top, any CV past roughly
+// seven thousand characters was rejected before a call was made — which is why
+// perfectly ordinary two-page CVs came back as "could not be read".
+//
+// 1536 leaves room for the whole schema: a hundred skills, eight domains and
+// every identity field is well under a thousand tokens even before the model
+// starts padding. If a genuinely enormous CV does truncate the reply, llm.js
+// doubles the cap and retries, so the ceiling is a starting point rather than
+// a hard limit.
+const CV_OUTPUT_TOKENS = parseInt(process.env.CV_EXTRACT_OUTPUT_TOKENS || '1536', 10);
 
 const SYSTEM = `You extract structured details from a candidate's CV.
 
@@ -228,11 +236,18 @@ async function extract(rawText) {
     };
   }
 
-  const prompt = `# CV\n${clip(rawText, CV_CHARS, 'CV')}`;
-  const { data, model, usage } = await generateJson({
+  // Shrinking rather than a fixed clip, for the same reason the matcher does
+  // it: the ceiling is a property of the provider tier, not of this code, so a
+  // budget that fits today fails on a smaller key tomorrow. A rejection
+  // re-renders the CV shorter instead of ending the upload — half a CV read is
+  // a candidate in the database, missing some of the older roles. Nothing read
+  // is a file the recruiter has to notice and handle by hand.
+  const build = (scale) => `# CV\n${clip(rawText, Math.floor(CV_CHARS * scale), 'CV')}`;
+  const { data, model, usage } = await generateShrinking({
     system: SYSTEM,
-    prompt,
     schema: SCHEMA,
+    build,
+    label: 'CV extraction',
     maxOutputTokens: CV_OUTPUT_TOKENS,
   });
 

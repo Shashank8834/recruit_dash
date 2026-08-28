@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import JDList from './JDList';
 import CandidateList from './CandidateList';
 import Review from './Review';
+import { errorFrom } from '../lib/api';
 
 /**
  * Everything that arrived from the WhatsApp group, in one place.
@@ -84,7 +85,7 @@ export default function WhatsApp() {
     setSyncError(null);
     try {
       const response = await fetch('/api/sheets/sync', { method: 'POST' });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
     } catch (e) {
       setSyncError(e.message);
     } finally {

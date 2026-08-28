@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import DateRangeFilter from '../components/DateRangeFilter';
 import { formatDate, toDateInput, toUnix, nowMinus, DEFAULT_RANGE_DAYS } from '../lib/utils';
+import { readJson } from '../lib/api';
 
 const RESULT_OPTIONS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'NEEDS_REVIEW', 'UNKNOWN'];
 
@@ -24,7 +25,7 @@ export default function CandidateList() {
 
     setLoading(true);
     fetch(`/api/applicants?${params}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setApplicants(Array.isArray(d) ? d : []); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [startDate, endDate, resultFilter]);
@@ -54,7 +55,7 @@ export default function CandidateList() {
         <p className="tnum text-sm text-ink-2">{applicants.length} in range</p>
       </div>
 
-      {error && <div className="notice-error">Error: {error}</div>}
+      {error && <div className="notice-error">{error}</div>}
 
       <div className="overflow-x-auto">
         <table className="min-w-full">

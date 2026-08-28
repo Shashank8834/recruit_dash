@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { errorFrom } from '../lib/api';
 
 /**
  * Attach a document to a record that has none, or replace the one it has.
@@ -39,8 +40,7 @@ export default function FileAttach({ basePath, hasFile, label, accept, onDone })
       // server parses nothing.
       const response = await fetch(`${basePath}/file`, { method: 'POST', body });
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       if (onDone) onDone();
     } catch (e) {

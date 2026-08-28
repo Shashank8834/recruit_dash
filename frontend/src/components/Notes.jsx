@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatDateTime } from '../lib/utils';
 import { useAuth } from '../lib/auth';
+import { errorFrom } from '../lib/api';
 
 /**
  * Notes on whatever record the page is showing.
@@ -40,8 +41,7 @@ export default function Notes({ basePath, notes = [], onChange, placeholder }) {
     try {
       const response = await fetch(path, options);
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       // Re-read rather than patching local state: the list is small and the
       // server owns the ordering and the timestamps.

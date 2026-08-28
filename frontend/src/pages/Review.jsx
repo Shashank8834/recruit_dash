@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import MessageThread from '../components/MessageThread';
 import { formatDateTime } from '../lib/utils';
+import { readJson, errorFrom } from '../lib/api';
 
 const VERDICTS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'UNKNOWN'];
 
@@ -20,7 +21,7 @@ function ReviewCard({ item, index, onResolved }) {
     if (next && !detail) {
       try {
         const r = await fetch(`/api/review/submissions/${item.submission_id}`);
-        if (!r.ok) throw new Error(`Server error ${r.status}`);
+        if (!r.ok) throw await errorFrom(r);
         setDetail(await r.json());
       } catch (e) {
         setError(e.message);
@@ -37,7 +38,7 @@ function ReviewCard({ item, index, onResolved }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ verdict, reviewer: 'dashboard' }),
       });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       onResolved(item.classification_id);
     } catch (e) {
       setError(e.message);
@@ -52,7 +53,7 @@ function ReviewCard({ item, index, onResolved }) {
       const r = await fetch(`/api/review/submissions/${item.submission_id}/reclassify`, {
         method: 'POST',
       });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       onResolved(item.classification_id);
     } catch (e) {
       setError(e.message);
@@ -166,7 +167,7 @@ export default function Review({ onCountChange }) {
   const load = useCallback(() => {
     setLoading(true);
     fetch('/api/review/queue')
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => {
         setItems(d.items);
         setCount(d.count);
@@ -199,7 +200,7 @@ export default function Review({ onCountChange }) {
         <button onClick={load} className="btn">Refresh</button>
       </div>
 
-      {error && <div className="notice-error">Error: {error}</div>}
+      {error && <div className="notice-error">{error}</div>}
 
       {loading ? (
         <div className="space-y-5">

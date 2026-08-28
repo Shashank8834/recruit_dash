@@ -4,6 +4,7 @@ import Notes from '../components/Notes';
 import MeetingList, { MeetingCadence } from '../components/MeetingList';
 import FileAttach from '../components/FileAttach';
 import { formatDate } from '../lib/utils';
+import { errorFrom, readJson } from '../lib/api';
 
 /**
  * One candidate, with their extracted fields editable and their notes beside
@@ -50,7 +51,7 @@ export default function TalentDetail() {
 
   const load = useCallback(() => {
     fetch(`/api/candidates/${id}`)
-      .then((r) => { if (!r.ok) throw new Error(r.status === 404 ? 'Candidate not found' : `Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setCandidate(d); setNotes(d.notes || []); })
       .catch((e) => setError(e.message));
   }, [id]);
@@ -78,7 +79,7 @@ export default function TalentDetail() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
       // Merged, not replaced. The PATCH response omits raw_text — list columns
       // deliberately exclude it, since it is the whole document — so assigning
       // the response wholesale blanked the CV text the moment anyone corrected

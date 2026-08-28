@@ -5,6 +5,7 @@ import {
   joinDateTime, formatDateTime, formatRelative, ordinal, DEFAULT_MEETING_TIME,
   MEETING_PERIODS, periodRange, customRange, describeRange,
 } from '../lib/utils';
+import { readJson, errorFrom } from '../lib/api';
 
 /**
  * Meetings booked with candidates, in date order.
@@ -296,10 +297,7 @@ export default function Meetings() {
   const load = useCallback(() => {
     setLoading(true);
     fetch(`/api/meetings?${query}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Server error ${r.status}`);
-        return r.json();
-      })
+      .then(readJson)
       .then((rows) => {
         setMeetings(Array.isArray(rows) ? rows : []);
         setLoading(false);
@@ -392,8 +390,7 @@ export default function Meetings() {
         }),
       });
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       const meeting = await response.json();
       // Straight to the meeting: the next thing anyone does is record what it

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatDate } from '../lib/utils';
 import { STAGES, StageTag } from '../components/RoleStage';
+import { readJson, errorFrom } from '../lib/api';
 
 /**
  * Roles a recruiter writes by hand.
@@ -29,7 +30,7 @@ export default function ManualRoles() {
     setLoading(true);
     const q = status ? `?status=${encodeURIComponent(status)}` : '';
     fetch(`/api/roles${q}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setRoles(Array.isArray(d) ? d : []); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [status]);
@@ -51,7 +52,7 @@ export default function ManualRoles() {
           requirements: form.requirements.split('\n').map((r) => r.trim()).filter(Boolean),
         }),
       });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
       const role = await response.json();
       navigate(`/roles/${role.external_id}`);
     } catch (e) {

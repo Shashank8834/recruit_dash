@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatDate, formatRelative } from '../lib/utils';
+import { readJson, errorFrom } from '../lib/api';
 
 /**
  * The talent pool: CVs uploaded here, and candidates typed in by hand.
@@ -60,7 +61,7 @@ export default function TalentPool() {
   const load = useCallback(() => {
     setLoading(true);
     fetch(`/api/candidates?${params()}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setCandidates(d.candidates || []); setTotal(d.total || 0); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,8 +133,7 @@ export default function TalentPool() {
         }),
       });
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       const candidate = await response.json();
       // Straight to the profile: a hand-entered candidate is usually missing

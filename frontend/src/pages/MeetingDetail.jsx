@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import Notes from '../components/Notes';
 import { MeetingSequence, MeetingCadence } from '../components/MeetingList';
 import { formatDateTime, formatRelative, daysBetween, splitDateTime, joinDateTime, ordinal, DEFAULT_MEETING_TIME } from '../lib/utils';
+import { errorFrom } from '../lib/api';
 
 /**
  * One meeting, and the account of how it went.
@@ -30,8 +31,8 @@ export default function MeetingDetail() {
 
   const load = useCallback(() => {
     fetch(`/api/meetings/${id}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(r.status === 404 ? 'Meeting not found' : `Server error ${r.status}`);
+      .then(async (r) => {
+        if (!r.ok) throw await errorFrom(r);
         return r.json();
       })
       .then(setMeeting)
@@ -64,8 +65,7 @@ export default function MeetingDetail() {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       // Merged rather than replaced: PATCH returns the meeting row, which
       // carries no notes, and assigning it wholesale would empty the timeline.
@@ -106,7 +106,7 @@ export default function MeetingDetail() {
     if (!window.confirm('Delete this meeting and its notes? This cannot be undone.')) return;
     try {
       const response = await fetch(`/api/meetings/${id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
       navigate('/meetings', { replace: true });
     } catch (e) {
       setError(e.message);

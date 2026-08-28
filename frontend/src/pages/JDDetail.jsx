@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import MatchBadge from '../components/MatchBadge';
 import Notes from '../components/Notes';
 import { formatDate } from '../lib/utils';
+import { readJson, errorFrom } from '../lib/api';
 
 export default function JDDetail() {
   const { id } = useParams();
@@ -18,7 +19,7 @@ export default function JDDetail() {
     setDeleting(true);
     try {
       const r = await fetch(`/api/jds/${id}`, { method: 'DELETE' });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       navigate('/whatsapp?tab=messages', { replace: true });
     } catch (e) {
       setError(e.message);
@@ -36,7 +37,7 @@ export default function JDDetail() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: next }),
       });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       setJd((prev) => ({ ...prev, Status: next }));
     } catch (e) {
       setError(e.message);
@@ -46,7 +47,7 @@ export default function JDDetail() {
 
   useEffect(() => {
     fetch(`/api/jds/${id}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setJd(d); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [id]);
@@ -59,7 +60,7 @@ export default function JDDetail() {
       </div>
     );
   }
-  if (error) return <div className="notice-error">Error: {error}</div>;
+  if (error) return <div className="notice-error">{error}</div>;
   if (!jd) return null;
 
   return (

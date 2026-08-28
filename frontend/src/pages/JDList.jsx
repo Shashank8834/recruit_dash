@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DateRangeFilter from '../components/DateRangeFilter';
 import { formatDate, toDateInput, toUnix, nowMinus, DEFAULT_RANGE_DAYS } from '../lib/utils';
+import { readJson } from '../lib/api';
 
 function StatusTag({ status }) {
   return (
@@ -36,7 +37,7 @@ export default function JDList() {
 
     setLoading(true);
     fetch(`/api/jds?${params}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setJds(Array.isArray(d) ? d : []); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [startDate, endDate, statusFilter]);
@@ -67,7 +68,7 @@ export default function JDList() {
         <p className="tnum text-sm text-ink-2">{jds.length} posted</p>
       </div>
 
-      {error && <div className="notice-error">Error: {error}</div>}
+      {error && <div className="notice-error">{error}</div>}
 
       <div className="overflow-x-auto">
         <table className="min-w-full">

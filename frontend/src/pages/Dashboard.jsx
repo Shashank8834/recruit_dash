@@ -4,6 +4,7 @@ import SummaryCard from '../components/SummaryCard';
 import { STAGES, stageLabel } from '../components/RoleStage';
 import MeetingList from '../components/MeetingList';
 import { formatDate } from '../lib/utils';
+import { readJson } from '../lib/api';
 
 /**
  * The overview of the side a recruiter curates.
@@ -89,7 +90,7 @@ export default function Dashboard() {
   const load = useCallback(() => {
     setLoading(true);
     fetch('/api/dashboard/managed')
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setStats(d); setError(null); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, []);
@@ -115,7 +116,7 @@ export default function Dashboard() {
         </button>
       </header>
 
-      {error && <div className="notice-error">Error: {error}</div>}
+      {error && <div className="notice-error">{error}</div>}
 
       {loading && !stats ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

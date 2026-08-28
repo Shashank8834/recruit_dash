@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import Notes from './Notes';
 import { formatDateTime, formatRelative, ordinal } from '../lib/utils';
+import { readJson } from '../lib/api';
 
 /**
  * Meetings as a table, on the Meetings page and on every record that has some.
@@ -168,10 +169,7 @@ function MeetingNotes({ meetingId, onCountChange }) {
 
   const load = useCallback(() => {
     fetch(`/api/meetings/${meetingId}/notes`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Server error ${r.status}`);
-        return r.json();
-      })
+      .then(readJson)
       .then((rows) => setNotes(Array.isArray(rows) ? rows : []))
       .catch((e) => setError(e.message));
   }, [meetingId]);

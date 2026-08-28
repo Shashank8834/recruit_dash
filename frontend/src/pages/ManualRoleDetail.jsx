@@ -6,6 +6,7 @@ import MeetingList from '../components/MeetingList';
 import FileAttach from '../components/FileAttach';
 import { STAGES, StageTag } from '../components/RoleStage';
 import { formatDate } from '../lib/utils';
+import { errorFrom, readJson } from '../lib/api';
 
 /**
  * One hand-written role and the candidates suggested for it.
@@ -153,7 +154,7 @@ export default function ManualRoleDetail() {
 
   const load = useCallback(() => {
     fetch(`/api/roles/${id}`)
-      .then((r) => { if (!r.ok) throw new Error(r.status === 404 ? 'Role not found' : `Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then(setRole)
       .catch((e) => setError(e.message));
   }, [id]);
@@ -170,8 +171,7 @@ export default function ManualRoleDetail() {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error((detail && detail.error) || `Server error ${response.status}`);
+        throw await errorFrom(response);
       }
       // Merged rather than replaced: PATCH returns the role row, which carries
       // no suggestions, and assigning it wholesale would empty the list below.
@@ -196,7 +196,7 @@ export default function ManualRoleDetail() {
     )) return;
     try {
       const response = await fetch(`/api/roles/${id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
       navigate('/roles', { replace: true });
     } catch (e) {
       setError(e.message);
@@ -211,7 +211,7 @@ export default function ManualRoleDetail() {
       // only source with a CV behind it. See the route.
       const params = '';
       const response = await fetch(`/api/roles/${id}/suggest${params}`, { method: 'POST' });
-      if (!response.ok) throw new Error(`Server error ${response.status}`);
+      if (!response.ok) throw await errorFrom(response);
       const data = await response.json();
       setNote(
         data.note ||

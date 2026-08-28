@@ -5,6 +5,7 @@ import Notes from '../components/Notes';
 import MeetingList, { MeetingCadence } from '../components/MeetingList';
 import MessageThread from '../components/MessageThread';
 import { formatDate, formatDateTime } from '../lib/utils';
+import { readJson, errorFrom } from '../lib/api';
 
 const VERDICTS = ['STRONG', 'PARTIAL', 'WEAK', 'NONE', 'UNKNOWN'];
 const RESULT_ORDER = { STRONG: 0, PARTIAL: 1, WEAK: 2, NEEDS_REVIEW: 3, NONE: 4, UNKNOWN: 5 };
@@ -21,7 +22,7 @@ export default function CandidateDetail() {
 
   function reload() {
     return fetch(`/api/applicants/${id}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then(setApplicant);
   }
 
@@ -35,7 +36,7 @@ export default function CandidateDetail() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ verdict, reviewer: 'dashboard' }),
       });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       await reload();
     } catch (e) {
       setError(e.message);
@@ -49,7 +50,7 @@ export default function CandidateDetail() {
       const r = await fetch(`/api/review/classifications/${applicant.classificationId}/override`, {
         method: 'DELETE',
       });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       await reload();
     } catch (e) {
       setError(e.message);
@@ -61,7 +62,7 @@ export default function CandidateDetail() {
     setDeleting(true);
     try {
       const r = await fetch(`/api/applicants/${id}`, { method: 'DELETE' });
-      if (!r.ok) throw new Error(`Server error ${r.status}`);
+      if (!r.ok) throw await errorFrom(r);
       navigate('/whatsapp?tab=applicants', { replace: true });
     } catch (e) {
       setError(e.message);
@@ -72,7 +73,7 @@ export default function CandidateDetail() {
 
   useEffect(() => {
     fetch(`/api/applicants/${id}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server error ${r.status}`); return r.json(); })
+      .then(readJson)
       .then((d) => { setApplicant(d); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, [id]);
@@ -85,7 +86,7 @@ export default function CandidateDetail() {
       </div>
     );
   }
-  if (error && !applicant) return <div className="notice-error">Error: {error}</div>;
+  if (error && !applicant) return <div className="notice-error">{error}</div>;
   if (!applicant) return null;
 
   // Last already-held meeting and soonest still ahead. Split on now() rather

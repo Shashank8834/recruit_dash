@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatDate, formatRelative } from '../lib/utils';
 import { readJson, errorFrom } from '../lib/api';
+import TruncatedList from '../components/TruncatedList';
 
 /**
  * The talent pool: CVs uploaded here, and candidates typed in by hand.
@@ -390,8 +391,13 @@ export default function TalentPool() {
                 <th className="th">Location</th>
                 <th className="th">Experience</th>
                 <th className="th">Current salary</th>
-                <th className="th">Skills</th>
-                <th className="th">Domain</th>
+                {/* Skills are multi-word phrases — "Post Merger Integration",
+                    "ERP implementation (Netsuite)". Left to the table's own
+                    sizing this column collapsed to ~110px, where one skill took
+                    three lines and five took eight. The table already scrolls
+                    horizontally; the width is better spent here than saved. */}
+                <th className="th min-w-[15rem]">Skills</th>
+                <th className="th min-w-[9rem]">Domain</th>
                 <th className="th">Contact</th>
                 <th className="th">CV</th>
                 <th className="th">Notes</th>
@@ -432,15 +438,14 @@ export default function TalentPool() {
                       </span>
                     )}
                   </td>
-                  <td className="td max-w-[14rem] text-xs">
-                    {(c.skills || []).length
-                      ? c.skills.join(', ')
-                      : <span className="text-ink-3">—</span>}
+                  {/* Folded, not shortened. A CV can name forty skills and all
+                      of them are searchable; showing all of them turns one row
+                      into a screenful. */}
+                  <td className="td text-xs">
+                    <TruncatedList items={c.skills} />
                   </td>
                   <td className="td text-xs">
-                    {(c.domain_expertise || []).length
-                      ? c.domain_expertise.join(', ')
-                      : <span className="text-ink-3">—</span>}
+                    <TruncatedList items={c.domain_expertise} />
                   </td>
                   <td className="td">
                     {c.email && <span className="block text-xs">{c.email}</span>}

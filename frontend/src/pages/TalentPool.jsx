@@ -60,6 +60,12 @@ export default function TalentPool() {
   const [entering, setEntering] = useState(false);
   const [form, setForm] = useState(BLANK);
   const [saving, setSaving] = useState(false);
+  // Kept apart from the page-level `error` above, which renders in the header
+  // — a hundred lines and four textareas above the button that causes this
+  // one. A refusal shown there is off-screen for anyone who has just filled
+  // the form in, so the submit appears to do nothing at all.
+  const [formError, setFormError] = useState(null);
+  const formErrorRef = useRef(null);
 
   const navigate = useNavigate();
 
@@ -90,6 +96,21 @@ export default function TalentPool() {
     const timer = setTimeout(load, 250);
     return () => clearTimeout(timer);
   }, [load]);
+
+  // Brought into view rather than merely rendered. The message sits at the
+  // bottom of a long form, but a duplicate is most often caught on a short one
+  // — a name and a phone number — where the button is still high up the page
+  // and the panel has grown downwards past the fold.
+  //
+  // Jumped, not animated. `behavior: 'smooth'` is not honoured everywhere —
+  // where it is ignored the scroll does not happen at all, which is the one
+  // outcome this exists to prevent — and a refusal is something to read now
+  // rather than to watch travel up the page.
+  useEffect(() => {
+    if (formError && formErrorRef.current) {
+      formErrorRef.current.scrollIntoView({ block: 'center' });
+    }
+  }, [formError]);
 
   async function onUpload(event) {
     const files = Array.from(event.target.files || []);
@@ -136,6 +157,7 @@ export default function TalentPool() {
 
     setSaving(true);
     setError(null);
+    setFormError(null);
     try {
       const response = await fetch('/api/candidates/manual', {
         method: 'POST',
@@ -159,7 +181,8 @@ export default function TalentPool() {
       // where they add it.
       navigate(`/talent/${candidate.external_id}`);
     } catch (e) {
-      setError(e.message);
+      // Reported beside the button that was pressed, not in the page header.
+      setFormError(e.message);
       setSaving(false);
     }
   }
@@ -194,7 +217,11 @@ export default function TalentPool() {
           </a>
           <button
             className="btn"
-            onClick={() => { setEntering((e) => !e); setUploadResult(null); }}
+            onClick={() => {
+              setEntering((e) => !e);
+              setUploadResult(null);
+              setFormError(null);
+            }}
           >
             {entering ? 'Cancel' : 'Add by hand'}
           </button>
@@ -321,6 +348,12 @@ export default function TalentPool() {
             />
           </label>
 
+          {formError && (
+            <div ref={formErrorRef} className="notice-error">
+              {formError}
+            </div>
+          )}
+
           <button className="btn-solid" type="submit" disabled={saving}>
             {saving ? 'Saving…' : 'Add candidate'}
           </button>
@@ -415,7 +448,7 @@ export default function TalentPool() {
           </select>
         </label>
         <label className="flex items-center gap-2.5">
-          <span className="micro">Type</span>
+          <span className="micro">Employee type</span>
           <select
             className="input"
             value={employeeType}

@@ -38,6 +38,12 @@ const LISTING_OPTIONS = [
   { value: 'unlisted', label: 'Unlisted' },
 ];
 
+const EMPLOYEE_TYPE_OPTIONS = [
+  { value: '', label: 'Not set' },
+  { value: 'elite', label: 'Elite' },
+  { value: 'non_elite', label: 'Non-elite' },
+];
+
 export default function TalentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -106,6 +112,12 @@ export default function TalentDetail() {
 
   const dirty = Object.keys(draft).length > 0;
   const byHand = candidate.entry_mode === 'manual';
+  // Unsaved choice first, stored one otherwise: the referrer field has to
+  // appear and disappear as the select is changed, not only after a save.
+  const employeeType =
+    draft.employeeType !== undefined
+      ? draft.employeeType || ''
+      : candidate.employee_type || '';
 
   return (
     <div className="space-y-8">
@@ -215,6 +227,47 @@ export default function TalentDetail() {
       </section>
 
       <section className="grid gap-8 sm:grid-cols-2">
+        <label className="block">
+          <span className="micro">Employee type</span>
+          <select
+            className="input mt-1.5 w-full"
+            value={employeeType}
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                employeeType: e.target.value || null,
+                // Sent together, so the referrer never survives a move to
+                // elite. Leaving it out would save a name the page has just
+                // stopped showing, against a classification that has no room
+                // for one.
+                ...(e.target.value === 'non_elite' ? {} : { referredBy: null }),
+              }))
+            }
+          >
+            {EMPLOYEE_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+
+        {/* Absent rather than disabled on the elite side: an empty box reads
+            as a detail somebody forgot to fill in. */}
+        {employeeType === 'non_elite' && (
+          <label className="block">
+            <span className="micro">Referred by</span>
+            <input
+              className="input mt-1.5 w-full"
+              value={
+                draft.referredBy !== undefined
+                  ? draft.referredBy || ''
+                  : candidate.referred_by || ''
+              }
+              placeholder="Anil Kumar"
+              onChange={(e) => setDraft((d) => ({ ...d, referredBy: e.target.value }))}
+            />
+          </label>
+        )}
+
         <label className="block">
           <span className="micro">Employer listed</span>
           <select

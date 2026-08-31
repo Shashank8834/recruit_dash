@@ -22,7 +22,22 @@ const BLANK = {
   name: '', email: '', phone: '', currentCompany: '', currentDesignation: '',
   location: '', age: '', experienceYears: '', qualifications: '', note: '',
   salaryText: '', domainExpertise: '', skills: '', companyListingStatus: '',
+  employeeType: '', referredBy: '',
 };
+
+/**
+ * How an employee type reads on screen. Stored as 'non_elite' because it is a
+ * value in a check constraint; written with a hyphen because that is how it is
+ * said out loud.
+ */
+const EMPLOYEE_TYPES = [
+  { value: 'elite', label: 'Elite' },
+  { value: 'non_elite', label: 'Non-elite' },
+];
+
+function employeeTypeLabel(value) {
+  return (EMPLOYEE_TYPES.find((t) => t.value === value) || {}).label || null;
+}
 
 export default function TalentPool() {
   const [candidates, setCandidates] = useState([]);
@@ -36,6 +51,7 @@ export default function TalentPool() {
   const [domain, setDomain] = useState('');
   const [skill, setSkill] = useState('');
   const [listingStatus, setListingStatus] = useState('');
+  const [employeeType, setEmployeeType] = useState('');
 
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
@@ -56,6 +72,7 @@ export default function TalentPool() {
     if (domain.trim()) p.set('domain', domain.trim());
     if (skill.trim()) p.set('skill', skill.trim());
     if (listingStatus) p.set('listingStatus', listingStatus);
+    if (employeeType) p.set('employeeType', employeeType);
     return p;
   };
 
@@ -66,7 +83,7 @@ export default function TalentPool() {
       .then((d) => { setCandidates(d.candidates || []); setTotal(d.total || 0); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, minExperience, salaryFrom, salaryTo, domain, skill, listingStatus]);
+  }, [search, minExperience, salaryFrom, salaryTo, domain, skill, listingStatus, employeeType]);
 
   // Debounced: typing in the search box should not fire a query per keystroke.
   useEffect(() => {
@@ -232,6 +249,35 @@ export default function TalentPool() {
                 <option value="unlisted">Unlisted</option>
               </select>
             </label>
+            <label className="block">
+              <span className="micro">Employee type</span>
+              <select
+                className="input mt-1.5 w-full"
+                value={form.employeeType}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    employeeType: e.target.value,
+                    // Cleared on the way out of non-elite rather than left
+                    // sitting in state behind a hidden field. An elite
+                    // candidate carries no referrer, and a name nobody can see
+                    // any more must not be the one that gets saved.
+                    referredBy: e.target.value === 'non_elite' ? form.referredBy : '',
+                  })
+                }
+              >
+                <option value="">Not set</option>
+                {EMPLOYEE_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+            {/* Only on the non-elite side. An elite candidate is here on their
+                own record, so who referred them is a question with no answer —
+                and the field is not merely disabled but absent, because an
+                empty box still reads as something left unfilled. */}
+            {form.employeeType === 'non_elite' &&
+              field('referredBy', 'Referred by', { placeholder: 'Anil Kumar' })}
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2">
@@ -368,6 +414,20 @@ export default function TalentPool() {
             <option value="unlisted">Unlisted</option>
           </select>
         </label>
+        <label className="flex items-center gap-2.5">
+          <span className="micro">Type</span>
+          <select
+            className="input"
+            value={employeeType}
+            onChange={(e) => setEmployeeType(e.target.value)}
+            title="Elite, or non-elite — candidates nobody has classified are in neither"
+          >
+            <option value="">Any</option>
+            {EMPLOYEE_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </label>
         <p className="tnum text-sm text-ink-2">{total} total</p>
       </div>
 
@@ -387,6 +447,10 @@ export default function TalentPool() {
             <thead>
               <tr>
                 <th className="th">Name</th>
+                {/* Beside the name rather than off in its own column: it is
+                    what the type filter selects on, and a filter whose result
+                    is invisible in the table is one nobody trusts. */}
+                <th className="th">Type</th>
                 <th className="th">Current role</th>
                 <th className="th">Location</th>
                 <th className="th">Experience</th>
@@ -417,6 +481,12 @@ export default function TalentPool() {
                   <td className="td">
                     <span className="font-semibold">{c.name || '—'}</span>
                     <span className="mono block">{c.external_id}</span>
+                  </td>
+                  <td className="td text-xs">
+                    {employeeTypeLabel(c.employee_type) || <span className="text-ink-3">—</span>}
+                    {c.referred_by && (
+                      <span className="block text-ink-2">via {c.referred_by}</span>
+                    )}
                   </td>
                   <td className="td">
                     {c.current_designation || '—'}

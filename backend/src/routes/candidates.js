@@ -50,6 +50,11 @@ const EXPORT_COLUMNS = [
   { key: 'domain_expertise', label: 'Domain expertise' },
   { key: 'company_listing_status', label: 'Employer listed',
     map: { listed: 'Listed', unlisted: 'Unlisted' } },
+  // Mapped for the same reason entry_mode is: 'non_elite' is how the column
+  // stores it, not how anyone reading the sheet says it.
+  { key: 'employee_type', label: 'Employee type',
+    map: { elite: 'Elite', non_elite: 'Non-elite' } },
+  { key: 'referred_by', label: 'Referred by' },
   // Mapped rather than dumped: 'upload' and 'manual' are storage values, and a
   // spreadsheet is read by people who never saw the schema.
   { key: 'entry_mode', label: 'Entered via', map: { upload: 'CV upload', manual: 'By hand' } },
@@ -82,6 +87,11 @@ function listFilters(req) {
     listingStatus: ['listed', 'unlisted'].includes(req.query.listingStatus)
       ? req.query.listingStatus
       : null,
+    // Same treatment: an unrecognised value is no filter rather than a filter
+    // that matches nobody.
+    employeeType: ['elite', 'non_elite'].includes(req.query.employeeType)
+      ? req.query.employeeType
+      : null,
   };
 }
 
@@ -96,6 +106,25 @@ function numberOrNull(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * How a candidate is classified, and who put them forward.
+ *
+ * The referrer is read only for the non-elite side. An elite candidate is here
+ * on their own record, so a name sent alongside that classification is either
+ * a stale value from a form that still had the field filled in or a mistake,
+ * and storing it would credit a referral that nobody made. The column has a
+ * constraint that says the same thing; this is what stops it being reached.
+ */
+function employment(body) {
+  const employeeType = ['elite', 'non_elite'].includes(body.employeeType)
+    ? body.employeeType
+    : null;
+  return {
+    employeeType,
+    referredBy: employeeType === 'non_elite' ? text(body.referredBy) : null,
+  };
 }
 
 /**
@@ -130,6 +159,25 @@ router.post('/', upload.array('files', 20), async (req, res) => {
         }
 
         const extracted = await cvExtractor.extract(cvText);
+
+        // The same CV a second time, or a fresh one for somebody already on
+        // file. Reported as a skipped file rather than stored: a second row
+        // would split their notes, meetings and match history in two, and the
+        // recruiter would have no way to see that had happened. Skipping is
+        // recoverable — the profile is named here, and a CV that genuinely
+        // should replace the old one is attached from that page.
+        const existing = await candidatesRepo.findDuplicate({
+          email: extracted.email,
+          phone: extracted.phone,
+        });
+        if (existing) {
+          failed.push({
+            file: file.originalname,
+            error: candidatesRepo.duplicateMessage(existing),
+          });
+          continue;
+        }
+
         const candidate = await candidatesRepo.create({
           fileName: file.originalname,
           fileSize: file.size,
@@ -184,6 +232,19 @@ router.post('/manual', async (req, res) => {
     const name = text(body.name);
     if (!name) return res.status(400).json({ error: 'A name is required.' });
 
+    const email = text(body.email);
+    const phone = text(body.phone);
+
+    // Refused, not merged. Somebody typing a referral in has no way to know
+    // whether this person is already in the pool, and the answer they need is
+    // which profile is theirs — not a second one silently created beside it.
+    // 409 rather than 400: the request is well formed, it conflicts with what
+    // is already here.
+    const existing = await candidatesRepo.findDuplicate({ email, phone });
+    if (existing) {
+      return res.status(409).json({ error: candidatesRepo.duplicateMessage(existing) });
+    }
+
     const salaryText = text(body.salaryText);
     const salary = parseSalary(salaryText || '');
 
@@ -191,8 +252,8 @@ router.post('/manual', async (req, res) => {
       entryMode: 'manual',
       rawText: '',
       name,
-      email: text(body.email),
-      phone: text(body.phone),
+      email,
+      phone,
       currentCompany: text(body.currentCompany),
       currentDesignation: text(body.currentDesignation),
       location: text(body.location),
@@ -216,6 +277,7 @@ router.post('/manual', async (req, res) => {
       companyListingStatus: ['listed', 'unlisted'].includes(body.companyListingStatus)
         ? body.companyListingStatus
         : null,
+      ...employment(body),
       uploadedBy: text(body.uploadedBy),
     });
 
@@ -403,7 +465,49 @@ router.get('/:id/cv.txt', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
-    const updated = await candidatesRepo.update(req.params.id, req.body || {});
+    const body = { ...(req.body || {}) };
+
+    // An edited email or phone can collide with somebody else just as a new
+    // one can, and the same rule applies. The candidate being edited is
+    // excluded, so correcting a typo in their own address is not read as a
+    // clash with themselves.
+    //
+    // Only the fields being changed are checked, never the ones already
+    // stored. Pools that predate this check contain pairs it would have
+    // refused, and reading an untouched email as part of a phone correction
+    // would make those rows uneditable — the one state where somebody is
+    // most likely to be trying to clean them up.
+    if (body.email !== undefined || body.phone !== undefined) {
+      const candidate = await candidatesRepo.findByExternalId(req.params.id);
+      if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+      const existing = await candidatesRepo.findDuplicate({
+        email: body.email,
+        phone: body.phone,
+        excludeId: candidate.id,
+      });
+      if (existing) {
+        return res.status(409).json({ error: candidatesRepo.duplicateMessage(existing) });
+      }
+    }
+
+    // Each field is normalised only if the request actually carries it. A
+    // PATCH sends the fields that changed and nothing else, so reading an
+    // absent one as a cleared one would blank somebody's classification the
+    // moment their referrer was corrected.
+    if (body.employeeType !== undefined) {
+      body.employeeType = ['elite', 'non_elite'].includes(body.employeeType)
+        ? body.employeeType
+        : null;
+    }
+    // The referrer belongs to the non-elite side alone. Only the explicit
+    // pairing has to be caught here — a referrer arriving without a
+    // classification is settled by the repo against the type the row already
+    // has, which is the value the constraint will be checked against.
+    if (body.referredBy !== undefined) {
+      body.referredBy = body.employeeType === 'elite' ? null : text(body.referredBy);
+    }
+
+    const updated = await candidatesRepo.update(req.params.id, body);
     if (!updated) return res.status(404).json({ error: 'Candidate not found' });
     res.json(updated);
   } catch (err) {
